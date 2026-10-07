@@ -21,6 +21,19 @@
 #   ./build-k1-fnos.sh
 set -euo pipefail
 
+# umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（该做的都做完了却判失败）。
+# 先 sync 落盘，再重试，最后惰性卸载兜底；任何情况下都不因此中断构建。
+umount_safe() {
+    local mnt="$1" i
+    sync
+    for i in 1 2 3; do
+        umount "$mnt" 2>/dev/null && return 0
+        sleep 2
+    done
+    umount -l "$mnt" 2>/dev/null && echo "  ⚠ $mnt 忙，已惰性卸载（数据已 sync）" && return 0
+    return 0
+}
+
 BASE="${BASE:?需要 BASE=<飞牛基镜像 .img>}"
 # UBOOT_DIR 可选：
 #   留空 = 保留基镜像自带的引导件（飞牛基镜像本身就是可启动的 RK3568 镜像，
@@ -95,7 +108,7 @@ fi
 echo
 echo "==== 3) 挂载镜像分区，取自身 PARTUUID 并配置引导 ===="
 cleanup() {
-    mountpoint -q "$BOOT_MNT" && umount "$BOOT_MNT" || true
+    mountpoint -q "$BOOT_MNT" && umount_safe "$BOOT_MNT" || true
     mountpoint -q "$ROOT_MNT" && umount "$ROOT_MNT" || true
     [[ -n "${LOOP:-}" ]] && losetup -d "$LOOP" 2>/dev/null || true
 }
@@ -159,7 +172,7 @@ EOF
 echo "  ── 写入后的 extlinux.conf ──"
 sed 's/^/     /' "$BOOT_MNT/extlinux/extlinux.conf"
 sync
-umount "$BOOT_MNT"
+umount_safe "$BOOT_MNT"
 
 echo
 echo "==== 4) rootfs 注入（模块/固件）===="
@@ -216,7 +229,9 @@ EOF
       echo "[Service]"
       echo "Type=oneshot"
       echo "RemainAfterExit=yes"
-      echo "ExecStart=/bin/sh -c 'for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do /sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/$m.ko 2>/dev/null || true; done'"
+      # 注意 \$m 必须转义：这是给【内层 /bin/sh】用的变量，若被本脚本展开，
+      # 在 set -u 下会直接报 "m: unbound variable" 并中断构建（实测踩到）。
+      echo "ExecStart=/bin/sh -c 'for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do /sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/\$m.ko 2>/dev/null || true; done'"
       echo ""
       echo "[Install]"
       echo "WantedBy=sysinit.target"
@@ -237,8 +252,10 @@ EOF
 fi
 
 # OTA 引导同步脚本（若基镜像自带则保留）
+# umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（明明该做的都做完了）。
+# 先 sync 落盘，再重试，最后惰性卸载兜底。
 sync
-umount "$ROOT_MNT"
+umount_safe "$ROOT_MNT"
 
 echo
 echo "==== 5) 产出校验 ===="
@@ -251,7 +268,7 @@ grep -q "root=PARTUUID=$ROOT_PARTUUID" "$BOOT_MNT/extlinux/extlinux.conf" \
     && echo "  ✓ 引导 root= 指向镜像自身 PARTUUID（不会误挂 eMMC）" || fail "root= 校验失败"
 grep -q "fdtfile=rockchip/$DTB_NAME" "$BOOT_MNT/fnEnv.txt" \
     && echo "  ✓ fnEnv fdtfile 正确" || fail "fnEnv 校验失败"
-umount "$BOOT_MNT"
+umount_safe "$BOOT_MNT"
 losetup -d "$LOOP2"
 
 echo
