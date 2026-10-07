@@ -28,6 +28,7 @@ on:
       - "dts/**"
       - "dist/**"
       - "modules/**"
+      - "build-uboot.sh"
       - "uboot/**"
       - "*.sh"
       - ".github/workflows/**"
@@ -39,14 +40,95 @@ env:
   TZ: Etc/UTC
 
 jobs:
+  uboot:
+    name: Build board u-boot (RK3568, DDR 1560MHz)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                 bc bison flex libssl-dev device-tree-compiler swig python3-setuptools \
+                 python3-dev xxd
+
+      - name: Check build script present
+        run: |
+          if [[ ! -f build-uboot.sh ]]; then
+            echo "::error::build-uboot.sh 不存在（本仓库自建 u-boot 的入口脚本）"
+            exit 1
+          fi
+          bash -n build-uboot.sh && echo "  ✓ build-uboot.sh 语法通过"
+
+      - name: Cache u-boot pair
+        if: ${{ !inputs.rebuild_uboot }}
+        uses: actions/cache@v4
+        with:
+          path: uboot-out
+          key: uboot-${{ hashFiles('build-uboot.sh') }}-rk3568-1560
+
+      - name: Build u-boot (idbloader + u-boot.itb)
+        run: |
+          set -e
+          mkdir -p uboot-out
+          if [[ -f uboot-out/idbloader.img && -f uboot-out/u-boot.itb ]]; then
+            echo "  命中缓存，跳过构建"
+          else
+            bash build-uboot.sh --out uboot-out
+          fi
+          ls -la uboot-out/
+
+      - name: Verify DDR firmware is the 1560MHz family (fandai)
+        run: |
+          set -e
+          IDB=uboot-out/idbloader.img
+          [[ -f "$IDB" ]] || { echo "::error::meiyou idbloader.img"; exit 1; }
+          echo "-- idbloader DDR --"
+          strings "$IDB" | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -3 || true
+          if strings "$IDB" | grep -q 'V1.18 f366f69a7d'; then
+            echo "::error::idbloader is DDR V1.18 from another board"
+            exit 1
+          fi
+          echo "  OK: not V1.18"
+          echo "-- u-boot.itb --"
+          file uboot-out/u-boot.itb
+
+      - name: Stage pair into repo layout
+        run: |
+          mkdir -p uboot/rk3568/kickpi-k1
+          cp -f uboot-out/idbloader.img uboot/rk3568/kickpi-k1/
+          cp -f uboot-out/u-boot.itb    uboot/rk3568/kickpi-k1/
+          ls -la uboot/rk3568/kickpi-k1/
+          sha256sum uboot/rk3568/kickpi-k1/idbloader.img uboot/rk3568/kickpi-k1/u-boot.itb
+
+      - name: Upload u-boot pair
+        uses: actions/upload-artifact@v4
+        with:
+          name: uboot-pair
+          path: |
+            uboot/rk3568/kickpi-k1/idbloader.img
+            uboot/rk3568/kickpi-k1/u-boot.itb
+          retention-days: 30
+          compression-level: 0
+
   build:
-    name: Build fnOS image for KICKPI K1
+    name: Assemble fnOS image
+    needs: uboot
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download u-boot pair
+        uses: actions/download-artifact@v4
+        with:
+          name: uboot-pair
+          path: uboot/rk3568/kickpi-k1
 
       - name: Free disk space (基镜像 + 产物 xz 需要空间)
         run: |
