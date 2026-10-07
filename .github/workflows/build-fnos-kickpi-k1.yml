@@ -126,7 +126,6 @@ jobs:
 
   build:
     name: Assemble fnOS image
-    needs: uboot
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -134,8 +133,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download u-boot pair
+      - name: Download u-boot pair (if built)
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: uboot-pair
           path: uboot/rk3568/kickpi-k1
