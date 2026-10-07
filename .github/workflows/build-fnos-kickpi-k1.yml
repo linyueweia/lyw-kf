@@ -27,11 +27,6 @@ on:
         required: false
         default: true
         type: boolean
-      rebuild_uboot:
-        description: "强制重建 u-boot（忽略缓存）"
-        required: false
-        default: false
-        type: boolean
   push:
     branches: [main]
     paths:
@@ -63,7 +58,9 @@ jobs:
       # 于是「跳过模块构建」与「装配仍去找 built-modules」判断相反，装配报
       # ls: cannot access 'built-modules'。rules：dispatch 显式 with_modules=false
       # 才关，其余（含 push）一律 true。
-      WITH_MODULES: ${{ inputs.with_modules == false && 'false' || 'true' }}
+      # 坑：push 触发时 inputs.* 为 null，而 GitHub 表达式里 ''/null == false 会返回
+      # true，于是"默认开"变成"默认关"。必须按事件类型短路，别只比较 inputs。
+      WITH_MODULES: ${{ github.event_name != 'workflow_dispatch' || inputs.with_modules != false }}
     timeout-minutes: 90
 
     steps:
