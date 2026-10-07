@@ -2,3 +2,5 @@ base/
 out/
 *.img
 *.img.xz
+# 本板自建 u-boot 引导件：idbloader.img 是必需产物（内嵌 1560MHz DDR 初始化固件），显式放行
+!uboot/rk3568/kickpi-k1/idbloader.img

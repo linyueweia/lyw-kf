@@ -223,6 +223,15 @@ jobs:
           sudo umount /mnt/dbg_root || true
           sudo losetup -d "$LOOP" || true
 
+      - name: Build board modules from base image headers
+        if: ${{ inputs.with_modules != false }}
+        run: |
+          set -e
+          chmod +x build-modules.sh
+          bash build-modules.sh base/fnnas-base.img built-modules \
+               https://github.com/retro98boy/seekwave-swt6621s
+          ls -la built-modules/
+
       - name: Note module plan
         run: |
           if [[ "${{ inputs.with_modules == false }}" == "true" ]]; then
@@ -243,7 +252,9 @@ jobs:
             MODDIR=""
             echo "  本阶段不注入模块：只验证引导链"
           else
-            MODDIR=modules
+            MODDIR=built-modules
+            echo "  注入用基镜像头文件编译的模块（built-modules/）"
+            ls -la "$MODDIR"
           fi
           sudo -E BASE=base/fnnas-base.img \
                   UBOOT_DIR="$UBOOT_DIR" \
