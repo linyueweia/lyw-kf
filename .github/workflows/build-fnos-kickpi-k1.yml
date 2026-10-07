@@ -193,7 +193,18 @@ jobs:
         run: |
           set -e
           if [[ -f uboot/rk3568/kickpi-k1/idbloader.img ]]; then
-            UBOOT_DIR=uboot/rk3568/kickpi-k1
+            # 【2026-10-08 实测结论·重要】不再注入自建 u-boot。
+            # 实测现象：TF 卡冷启动，电源灯亮、系统灯不亮（内核从未运行），
+            # 机器回落到 eMMC 系统 → 引导链在 SPL 阶段就断了。
+            # 取证（卡 vs 本板 eMMC 原厂引导件）：
+            #   本板原厂(可用) : DDR v1.23-03ea844c5d + U-Boot SPL 2017.09
+            #   自建(不可用)   : DDR v1.26-5c7dbc4d49 + U-Boot 2023.10(radxa 板型)
+            #   前 1MiB 逐段(32K/64K/…/512K)全部不同，属两套不同引导架构。
+            # 而飞牛基镜像【自带】引导件的 DDR 固件 = ddr-v1.23-03ea844c5d，
+            # 与本板 eMMC 原厂那份同版本同哈希 —— 说明基镜像的引导链本就是对的，
+            # 被我们覆盖反而坏事。故这里留空，走 build-k1-fnos.sh 的
+            # "保留基镜像自带 bootloader" 分支（脚本注释即称其为最稳打法）。
+            UBOOT_DIR=""
           else
             UBOOT_DIR=""
           fi
