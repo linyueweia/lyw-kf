@@ -98,7 +98,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq xz-utils btrfs-progs device-tree-compiler \
-                                     qemu-user-static file kmod libelf-dev
+                                     qemu-user-static file kmod libelf-dev flex bison
 
       - name: Cache fnOS base image
         id: basecache

@@ -98,6 +98,35 @@ if [[ ! -f "$HDR/.config" ]]; then
         exit 1
     fi
 fi
+# 飞牛基镜像的 linux-headers 包裁剪过：include/config/auto.conf 在，
+# 但 include/generated/autoconf.h 不在（内核 Makefile:862 据此报
+#   ERROR: Kernel configuration is invalid ... missing: include/generated/autoconf.h）
+# 同一处还会检查 6.18 新增的 include/generated/rustc_cfg。两者都必须补齐。
+if [[ ! -f "$HDR/include/generated/autoconf.h" ]]; then
+    echo "  · 缺 include/generated/autoconf.h，正在生成"
+    mkdir -p "$HDR/include/generated"
+    make -C "$HDR" ARCH=arm64 syncconfig >/dev/null 2>&1 \
+        || make -C "$HDR" ARCH=arm64 oldconfig  >/dev/null 2>&1 \
+        || make -C "$HDR" ARCH=arm64 prepare   >/dev/null 2>&1 || true
+    if [[ ! -s "$HDR/include/generated/autoconf.h" ]]; then
+        echo "  · 内核自身生成不可用，改为直接从 .config 生成 autoconf.h"
+        {
+            sed -n 's/^\(CONFIG_[A-Za-z0-9_]*\)=[yY]$/#define \1 1/p'   "$HDR/.config"
+            sed -n 's/^\(CONFIG_[A-Za-z0-9_]*\)=[mM]$/#define \1 1/p'   "$HDR/.config"
+            sed -n 's/^\(CONFIG_[A-Za-z0-9_]*\)=\([0-9][0-9a-fA-FxX]*\)$/#define \1 \2/p' "$HDR/.config"
+            sed -n 's/^\(CONFIG_[A-Za-z0-9_]*\)="\(.*\)"$/#define \1 "\2"/p' "$HDR/.config"
+            sed -n 's/^# \(CONFIG_[A-Za-z0-9_]*\) is not set$/\/* #undef \1 *\//p' "$HDR/.config"
+        } > "$HDR/include/generated/autoconf.h"
+    fi
+    [[ -s "$HDR/include/generated/autoconf.h" ]] \
+        || { echo "✗ 仍无法生成 include/generated/autoconf.h"; exit 1; }
+    echo "  ✓ autoconf.h 就绪（$(wc -l < "$HDR/include/generated/autoconf.h") 行）"
+fi
+if [[ ! -e "$HDR/include/generated/rustc_cfg" ]]; then
+    : > "$HDR/include/generated/rustc_cfg"
+    echo "  ✓ 补 include/generated/rustc_cfg 占位（仅模块构建用不到 Rust）"
+fi
+
 grep -qE '^CONFIG_MODULE_SIG_FORCE=y' "$HDR/.config" 2>/dev/null \
     && { echo "✗ 该内核强制模块签名，自编模块无法加载"; exit 1; } \
     || echo "  ✓ 内核未强制模块签名"
@@ -110,10 +139,11 @@ if [[ ! -x "$HDR/scripts/mod/modpost" ]]; then
     if ! make -C "$HDR" scripts >/dev/null 2>&1 || [[ ! -x "$HDR/scripts/mod/modpost" ]]; then
         echo "  · make scripts 不适用，手工编译 fixdep 与 modpost"
         # modpost 需要 libelf；缺了就自己装（CI runner 上默认没有）
-        if ! ldconfig -p 2>/dev/null | grep -q libelf; then
-            apt-get update -qq >/dev/null 2>&1 || true
-            apt-get install -y -qq libelf-dev >/dev/null 2>&1 || true
-        fi
+        # 主机工具：libelf 给 modpost；flex/bison 给 scripts/kconfig 的词法/语法分析器
+        # （实测缺 flex/bison 时 `make scripts` 与 `make syncconfig` 都会失败，
+        #   于是 autoconf.h 生成不出来 → 编译报 "Kernel configuration is invalid"）
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y -qq libelf-dev flex bison >/dev/null 2>&1 || true
         gcc -o "$HDR/scripts/basic/fixdep" "$HDR/scripts/basic/fixdep.c" -I"$HDR/scripts/include" 2>/dev/null || true
         gcc -O2 -o "$HDR/scripts/mod/modpost" "$HDR/scripts/mod/modpost.c" \
             "$HDR/scripts/mod/file2alias.c" "$HDR/scripts/mod/sumversion.c" \
