@@ -50,99 +50,45 @@ env:
   TZ: Etc/UTC
 
 jobs:
-  uboot:
-    name: Build board u-boot (RK3568, DDR 1560MHz)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install cross toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-                 bc bison flex libssl-dev device-tree-compiler swig python3-setuptools \
-                 python3-dev xxd python3-pyelftools u-boot-tools
-
-      - name: Check build script present
-        run: |
-          if [[ ! -f build-uboot.sh ]]; then
-            echo "::error::build-uboot.sh 不存在（本仓库自建 u-boot 的入口脚本）"
-            exit 1
-          fi
-          bash -n build-uboot.sh && echo "  ✓ build-uboot.sh 语法通过"
-
-      - name: Cache u-boot pair
-        if: ${{ !inputs.rebuild_uboot }}
-        uses: actions/cache@v4
-        with:
-          path: uboot-out
-          key: uboot-${{ hashFiles('build-uboot.sh') }}-rk3568-1560
-
-      - name: Build u-boot (idbloader + u-boot.itb)
-        run: |
-          set -e
-          mkdir -p uboot-out
-          if [[ -f uboot-out/idbloader.img && -f uboot-out/u-boot.itb ]]; then
-            echo "  命中缓存，跳过构建"
-          else
-            bash build-uboot.sh --out uboot-out
-          fi
-          ls -la uboot-out/
-
-      - name: Verify DDR firmware is the 1560MHz family (fandai)
-        run: |
-          set -e
-          IDB=uboot-out/idbloader.img
-          [[ -f "$IDB" ]] || { echo "::error::meiyou idbloader.img"; exit 1; }
-          echo "-- idbloader DDR --"
-          strings "$IDB" | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -3 || true
-          if strings "$IDB" | grep -q 'V1.18 f366f69a7d'; then
-            echo "::error::idbloader is DDR V1.18 from another board"
-            exit 1
-          fi
-          echo "  OK: not V1.18"
-          echo "-- u-boot.itb --"
-          file uboot-out/u-boot.itb
-
-      - name: Stage pair into repo layout
-        run: |
-          mkdir -p uboot/rk3568/kickpi-k1
-          cp -f uboot-out/idbloader.img uboot/rk3568/kickpi-k1/
-          cp -f uboot-out/u-boot.itb    uboot/rk3568/kickpi-k1/
-          ls -la uboot/rk3568/kickpi-k1/
-          sha256sum uboot/rk3568/kickpi-k1/idbloader.img uboot/rk3568/kickpi-k1/u-boot.itb
-
-      - name: Upload u-boot pair
-        uses: actions/upload-artifact@v4
-        with:
-          name: uboot-pair
-          path: |
-            uboot/rk3568/kickpi-k1/idbloader.img
-            uboot/rk3568/kickpi-k1/u-boot.itb
-          retention-days: 30
-          compression-level: 0
-
   build:
     name: Assemble fnOS image
-    # 依赖 uboot job：避免"抢跑"导致下载不到产物（实测出现过
-    # "Artifact not found for name: uboot-pair"）。
-    # 仓库内也提交了同一对 u-boot（uboot/rk3568/kickpi-k1/）作为兜底，
-    # 万一 uboot job 失败，可临时去掉本行让 build 用仓库里的那份。
-    needs: uboot
+    # u-boot 不是每次编译的产物，而是仓库里的【素材】：
+    # uboot/rk3568/kickpi-k1/{idbloader.img,u-boot.itb}
+    # （此前用 uboot job + artifact 传递，既慢又出现过抢跑报
+    #   "Artifact not found for name: uboot-pair"；现改为素材直取。）
     runs-on: ubuntu-24.04
+    env:
+      # 只在这里判定一次，后面全部读这个值。
+      # 踩过的坑：同一输入在三处写成不同形式 —— push 触发时 inputs.* 为空，
+      # 于是「跳过模块构建」与「装配仍去找 built-modules」判断相反，装配报
+      # ls: cannot access 'built-modules'。rules：dispatch 显式 with_modules=false
+      # 才关，其余（含 push）一律 true。
+      WITH_MODULES: ${{ inputs.with_modules == false && 'false' || 'true' }}
     timeout-minutes: 90
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download u-boot pair
-        uses: actions/download-artifact@v4
-        with:
-          name: uboot-pair
-          path: uboot/rk3568/kickpi-k1
+      - name: Check committed u-boot pair (素材，不重新编译)
+        # u-boot 作为【素材】提交在仓库里：uboot/rk3568/kickpi-k1/{idbloader.img,u-boot.itb}
+        # 用户要求：不要每次编固件都重编 u-boot。需要更新素材时，本地手动跑
+        # build-uboot.sh 重新生成并提交（见该目录 BUILD-PROVENANCE.md）。
+        run: |
+          set -e
+          D=uboot/rk3568/kickpi-k1
+          ls -la "$D"
+          for f in idbloader.img u-boot.itb; do
+            [[ -s "$D/$f" ]] || { echo "!! 缺少 u-boot 素材: $D/$f"; exit 1; }
+          done
+          echo "  ✓ u-boot 素材齐备（idbloader + u-boot.itb）"
+          python3 - <<'PY'
+          import pathlib
+          d = pathlib.Path("uboot/rk3568/kickpi-k1/idbloader.img").read_bytes()
+          print("   idbloader 大小: %d" % len(d))
+          assert b"1056MHz" not in d, "idbloader 含 1056MHz —— 不是本板 DDR 家族"
+          print("   ✓ DDR 固件不属 1056MHz 家族（本板为 1560MHz）")
+          PY
 
       - name: Free disk space (基镜像 + 产物 xz 需要空间)
         run: |
@@ -228,7 +174,7 @@ jobs:
           sudo losetup -d "$LOOP" || true
 
       - name: Build board modules from base image headers
-        if: ${{ inputs.with_modules != false }}
+        if: env.WITH_MODULES == 'true'
         run: |
           set -e
           chmod +x build-modules.sh
@@ -239,7 +185,7 @@ jobs:
 
       - name: Note module plan
         run: |
-          if [[ "${{ inputs.with_modules == false }}" == "true" ]]; then
+          if [[ "$WITH_MODULES" == "false" ]]; then
             echo "本阶段不注入模块：只验证引导链（DTB + 引导配置）"
           else
             echo "将注入 modules/ 下的 .ko（脚本会做 vermagic 硬闸，不匹配则失败）"
@@ -253,7 +199,7 @@ jobs:
           else
             UBOOT_DIR=""
           fi
-          if [[ "${{ inputs.with_modules }}" == "false" ]]; then
+          if [[ "$WITH_MODULES" == "false" ]]; then
             MODDIR=""
             echo "  本阶段不注入模块：只验证引导链"
           else
@@ -276,7 +222,7 @@ jobs:
           set -e
           IMG="$(ls out/*.img | head -1)"
           echo "验证镜像: $IMG"
-          if [[ "${{ inputs.with_modules }}" == "false" ]]; then
+          if [[ "$WITH_MODULES" == "false" ]]; then
             EXP=0
           else
             EXP=1
