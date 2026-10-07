@@ -126,6 +126,11 @@ jobs:
 
   build:
     name: Assemble fnOS image
+    # 依赖 uboot job：避免"抢跑"导致下载不到产物（实测出现过
+    # "Artifact not found for name: uboot-pair"）。
+    # 仓库内也提交了同一对 u-boot（uboot/rk3568/kickpi-k1/）作为兜底，
+    # 万一 uboot job 失败，可临时去掉本行让 build 用仓库里的那份。
+    needs: uboot
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -133,9 +138,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download u-boot pair (if built)
+      - name: Download u-boot pair
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: uboot-pair
           path: uboot/rk3568/kickpi-k1
