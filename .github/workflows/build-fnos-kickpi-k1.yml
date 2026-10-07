@@ -22,6 +22,16 @@ on:
         required: false
         default: "fnnas-official-arm64-image_rockchip.img.gz"
         type: string
+      with_modules:
+        description: "是否注入板级模块（需与基镜像内核匹配的 .ko；关闭则只验证引导链）"
+        required: false
+        default: true
+        type: boolean
+      rebuild_uboot:
+        description: "强制重建 u-boot（忽略缓存）"
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -229,10 +239,16 @@ jobs:
           else
             UBOOT_DIR=""
           fi
+          if [[ "${{ inputs.with_modules }}" == "false" ]]; then
+            MODDIR=""
+            echo "  本阶段不注入模块：只验证引导链"
+          else
+            MODDIR=modules
+          fi
           sudo -E BASE=base/fnnas-base.img \
                   UBOOT_DIR="$UBOOT_DIR" \
                   DTB=dist/rk3568-kickpi-k1.dtb \
-                  MODULES_DIR=modules \
+                  MODULES_DIR="$MODDIR" \
                   DEVICE_LABEL=KICKPI-K1 \
                   BUILD_NUM="${{ github.run_number }}" \
                   OUT_DIR=out \
