@@ -18,8 +18,11 @@ bad()  { echo "  ✗ $*"; FAIL=1; }
 warn() { echo "  ⚠ $*"; }
 
 EMMC_PARTUUID="614e0000-0000-4b53-8000-1d28000054a9"   # 本机 eMMC 厂商根分区
-KREL_NEED="6.18.18"                                     # 飞牛内核 6.18.18-trim
-KREL_FULL="6.18.18-trim"
+# 内核 release 绝不写死：从镜像自身取。踩过的坑 —— 写死成社区内核的
+# "6.18.18-trim" 去比飞牛基镜像的 "6.18.18.c951-trim"，会在模块明明匹配时
+# 误报 "maxio.ko vermagic 与内核不符"（曾经因此白排查一轮）。
+KREL_NEED=""      # 形如 6.18.18 的前缀，运行时从镜像推导
+KREL_FULL=""      # 完整 release，运行时从镜像推导
 
 echo "==== 镜像: $IMG ($(stat -c%s "$IMG" 2>/dev/null || echo '?') 字节) ===="
 [[ -f "$IMG" ]] || { echo "✗ 镜像不存在"; exit 1; }
@@ -120,7 +123,13 @@ if [[ -n "$RP" ]]; then
     FS="$(lsblk -no FSTYPE "$RP" | tr -d ' ')"
     [[ "$FS" == "btrfs" ]] && ok "rootfs 是 btrfs（飞牛 OTA 前提）" || bad "rootfs 是 $FS，飞牛要求 btrfs"
     mount "$RP" "$MNT_R" 2>/dev/null && {
-        KDIR="$(find "$MNT_R/usr/lib/modules" -maxdepth 1 -type d -name "${KREL_NEED}*" | head -1)"
+        # 以镜像里【实际存在】的模块目录为准（它就是该内核的 release）
+        KDIR="$(find "$MNT_R/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
+        if [[ -n "$KDIR" ]]; then
+            KREL_FULL="$(basename "$KDIR")"
+            KREL_NEED="${KREL_FULL%%-*}"
+            echo "      镜像内核 release（实取）= $KREL_FULL"
+        fi
         if [[ -n "$KDIR" ]]; then
             ok "内核模块目录存在: $(basename "$KDIR")"
             MK="$(find "$KDIR" -name 'maxio.ko' | head -1)"
@@ -132,7 +141,7 @@ if [[ -n "$RP" ]]; then
             fi
             grep -qs '^maxio$' "$MNT_R/etc/modules-load.d/"*.conf && ok "已配置开机自动加载 maxio" || warn "未见 modules-load.d 里的 maxio"
         else
-            bad "rootfs 里没有 ${KREL_NEED} 的模块目录"
+            bad "rootfs 里没有任何内核模块目录（/usr/lib/modules 为空）"
         fi
         ls "$MNT_R"/etc/os-release >/dev/null 2>&1 && grep -E '^(NAME|VERSION_ID)=' "$MNT_R/etc/os-release" | sed 's/^/       /'
         umount "$MNT_R"
