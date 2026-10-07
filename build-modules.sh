@@ -102,8 +102,10 @@ fi
 # 但 include/generated/autoconf.h 不在（内核 Makefile:862 据此报
 #   ERROR: Kernel configuration is invalid ... missing: include/generated/autoconf.h）
 # 同一处还会检查 6.18 新增的 include/generated/rustc_cfg。两者都必须补齐。
-if [[ ! -f "$HDR/include/generated/autoconf.h" ]]; then
-    echo "  · 缺 include/generated/autoconf.h，正在生成"
+# 注意用 -s（非空）：裁剪过的头文件包可能给一个 0 字节的 autoconf.h，
+# 用 -f 会放过它，而内核 Makefile 用 $(wildcard ...) 判定，空文件同样算缺失。
+if [[ ! -s "$HDR/include/generated/autoconf.h" ]]; then
+    echo "  · 缺（或为空）$HDR/include/generated/autoconf.h，正在生成"
     mkdir -p "$HDR/include/generated"
     make -C "$HDR" ARCH=arm64 syncconfig >/dev/null 2>&1 \
         || make -C "$HDR" ARCH=arm64 oldconfig  >/dev/null 2>&1 \
@@ -122,10 +124,17 @@ if [[ ! -f "$HDR/include/generated/autoconf.h" ]]; then
         || { echo "✗ 仍无法生成 include/generated/autoconf.h"; exit 1; }
     echo "  ✓ autoconf.h 就绪（$(wc -l < "$HDR/include/generated/autoconf.h") 行）"
 fi
-if [[ ! -e "$HDR/include/generated/rustc_cfg" ]]; then
-    : > "$HDR/include/generated/rustc_cfg"
+if [[ ! -s "$HDR/include/generated/rustc_cfg" ]]; then
+    echo "# 模块构建不需要 Rust，此处为占位（6.18 的完整性检查要求该文件存在）" \
+        > "$HDR/include/generated/rustc_cfg"
     echo "  ✓ 补 include/generated/rustc_cfg 占位（仅模块构建用不到 Rust）"
 fi
+# 时间戳刷新：内核判定 auto.conf 是否过期依赖这些派生文件的时间戳，
+# 只要它们比 .config/auto.conf 旧，make 就会去重建 auto.conf 并触发完整性检查。
+touch "$HDR/include/generated/autoconf.h" "$HDR/include/generated/rustc_cfg" \
+      "$HDR/include/config/auto.conf" 2>/dev/null || true
+[[ -e "$HDR/include/config/auto.conf.cmd" ]] || : > "$HDR/include/config/auto.conf.cmd"
+echo "  ✓ 派生文件已就绪（autoconf.h $(stat -c%s "$HDR/include/generated/autoconf.h") 字节）"
 
 grep -qE '^CONFIG_MODULE_SIG_FORCE=y' "$HDR/.config" 2>/dev/null \
     && { echo "✗ 该内核强制模块签名，自编模块无法加载"; exit 1; } \
