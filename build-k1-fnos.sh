@@ -35,7 +35,10 @@ OUT_DIR="${OUT_DIR:-$(pwd)/out}"
 
 BOOT_MNT=/mnt/k1fnos_boot
 ROOT_MNT=/mnt/k1fnos_root
-KREL=6.18.18-trim
+# 内核版本不写死：从基镜像 BOOT 分区里的 vmlinuz-* / config-* 自动探测。
+# 教训：社区内核包是 6.18.18-trim，而飞牛基镜像自带的是 6.18.18.c951-trim，
+#       两者的 vermagic 不同，用错版本编出的 .ko 一个都加载不了。
+KREL="${KREL:-}"
 
 fail() { echo "✗ $*" >&2; exit 1; }
 
@@ -112,17 +115,38 @@ mount "$BOOT_PART" "$BOOT_MNT" || fail "挂载 boot 分区失败"
 echo "  ── 基镜像 BOOT 分区原有内容（前 20 项）──"
 ls "$BOOT_MNT" | head -20 | sed 's/^/     /'
 
+# 探测内核版本（vmlinuz-<rel> 或 config-<rel>）
+if [[ -z "$KREL" ]]; then
+    KREL="$(ls "$BOOT_MNT" 2>/dev/null | sed -n 's/^vmlinuz-//p' | head -1)"
+    [[ -z "$KREL" ]] && KREL="$(ls "$BOOT_MNT" 2>/dev/null | sed -n 's/^config-//p' | head -1)"
+fi
+[[ -n "$KREL" ]] || fail "无法从 BOOT 分区探测内核版本"
+if [[ ! -f "$BOOT_MNT/vmlinuz-$KREL" && ! -f "$BOOT_MNT/vmlinuz" ]]; then
+    warn_keep=1
+fi
+echo "  内核版本(KREL) = $KREL"
+echo "  BOOT 分区里的内核/配置: $(ls "$BOOT_MNT" | grep -E '^(vmlinuz|config|System.map)' | tr '\n' ' ')"
+
 DTB_NAME="$(basename "$DTB")"
 mkdir -p "$BOOT_MNT/dtb/rockchip"
 cp -f "$DTB" "$BOOT_MNT/dtb/rockchip/$DTB_NAME"
 
-cat > "$BOOT_MNT/fnEnv.txt" <<EOF
+# 保留基镜像原有 fnEnv.txt 的字段（如 kernelfile=），只改/增 fdtfile。
+# 理由：飞牛的 boot.scr 依赖 fnEnv 里的 kernelfile 等键，整份覆盖会把引导搞坏。
+if [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
+    echo "  ── 基镜像原有 fnEnv.txt（保留其字段）──"
+    sed 's/^/     /' "$BOOT_MNT/fnEnv.txt"
+    grep -v '^fdtfile=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
+    { cat /tmp/_fnenv.keep; echo "fdtfile=rockchip/$DTB_NAME"; } > "$BOOT_MNT/fnEnv.txt"
+else
+    cat > "$BOOT_MNT/fnEnv.txt" <<EOF
 verbosity=1
 bootlogo=false
 console=both
 extraargs=cma=256M
 fdtfile=rockchip/$DTB_NAME
 EOF
+fi
 
 mkdir -p "$BOOT_MNT/extlinux"
 cat > "$BOOT_MNT/extlinux/extlinux.conf" <<EOF
@@ -144,7 +168,19 @@ echo "  rootfs 类型: $(lsblk -no FSTYPE "$ROOT_PART")"
 
 if [[ -n "$MODULES_DIR" && -d "$MODULES_DIR" ]]; then
     KDIR="$ROOT_MNT/usr/lib/modules/$KREL"
-    [[ -d "$KDIR" ]] || fail "rootfs 里没有 /usr/lib/modules/$KREL（内核版本不符？）"
+    if [[ ! -d "$KDIR" ]]; then
+        echo "  rootfs 里现有的模块目录:"
+        ls "$ROOT_MNT/usr/lib/modules" 2>/dev/null | sed 's/^/     /'
+        fail "rootfs 里没有 /usr/lib/modules/$KREL"
+    fi
+    # vermagic 硬闸：模块必须与镜像内核 release 完全一致，否则加载不了（本次已实际踩到）
+    for ko in $(find "$MODULES_DIR" -name '*.ko'); do
+        vm="$(strings "$ko" | grep -oE 'vermagic=[^\"]*' | head -1)"
+        case "$vm" in
+            *"$KREL"*) echo "     ✓ $(basename "$ko") vermagic 匹配 ($vm)";;
+            *) fail "$(basename "$ko") 的 vermagic 与镜像内核不符：$vm（镜像要求含 $KREL）";;
+        esac
+    done
     mkdir -p "$KDIR/updates/kickpi-k1"
     n=0
     while IFS= read -r ko; do

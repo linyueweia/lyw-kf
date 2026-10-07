@@ -186,6 +186,41 @@ jobs:
           echo "── DTB ──"; ls -la dist/
           echo "── 模块 ──"; find modules -name '*.ko' -exec ls -la {} \;
 
+      - name: Diagnose base image kernel / headers
+        run: |
+          set -e
+          IMG=base/fnnas-base.img
+          LOOP=$(sudo losetup -fP --show "$IMG")
+          sudo mkdir -p /mnt/dbg_boot /mnt/dbg_root
+          sudo mount "${LOOP}p1" /mnt/dbg_boot || true
+          echo "── BOOT(vmlinuz/config/System.map) ──"
+          ls /mnt/dbg_boot | grep -E '^(vmlinuz|config|System.map)' | sed 's/^/   /' || true
+          sudo umount /mnt/dbg_boot || true
+          sudo mount "${LOOP}p2" /mnt/dbg_root || true
+          echo "── rootfs: /usr/lib/modules ──"
+          sudo ls /mnt/dbg_root/usr/lib/modules 2>/dev/null | sed 's/^/   /' || echo "   (无)"
+          echo "── rootfs: /usr/src（内核头文件？）──"
+          sudo ls /mnt/dbg_root/usr/src 2>/dev/null | sed 's/^/   /' || echo "   (无)"
+          for d in $(sudo ls -d /mnt/dbg_root/usr/src/* 2>/dev/null); do
+            echo "   [$d] Module.symvers=$([[ -f $d/Module.symvers ]] && echo yes || echo no) \
+                  auto.conf=$([[ -f $d/include/config/auto.conf ]] && echo yes || echo no) \
+                  Makefile=$([[ -f $d/Makefile ]] && echo yes || echo no)"
+          done
+          echo "── 模块目录内容（前 15） ──"
+          for m in $(sudo ls -d /mnt/dbg_root/usr/lib/modules/* 2>/dev/null); do
+            echo "   [$m]"; sudo ls "$m" | head -15 | sed 's/^/      /'
+          done
+          sudo umount /mnt/dbg_root || true
+          sudo losetup -d "$LOOP" || true
+
+      - name: Note module plan
+        run: |
+          if [[ "${{ inputs.with_modules == false }}" == "true" ]]; then
+            echo "本阶段不注入模块：只验证引导链（DTB + 引导配置）"
+          else
+            echo "将注入 modules/ 下的 .ko（脚本会做 vermagic 硬闸，不匹配则失败）"
+          fi
+
       - name: Assemble fnOS image
         run: |
           set -e
