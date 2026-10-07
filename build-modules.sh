@@ -66,6 +66,11 @@ done
 if [[ ! -x "$HDR/scripts/mod/modpost" ]]; then
     if ! make -C "$HDR" scripts >/dev/null 2>&1 || [[ ! -x "$HDR/scripts/mod/modpost" ]]; then
         echo "  · make scripts 不适用，手工编译 fixdep 与 modpost"
+        # modpost 需要 libelf；缺了就自己装（CI runner 上默认没有）
+        if ! ldconfig -p 2>/dev/null | grep -q libelf; then
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y -qq libelf-dev >/dev/null 2>&1 || true
+        fi
         gcc -o "$HDR/scripts/basic/fixdep" "$HDR/scripts/basic/fixdep.c" -I"$HDR/scripts/include" 2>/dev/null || true
         gcc -O2 -o "$HDR/scripts/mod/modpost" "$HDR/scripts/mod/modpost.c" \
             "$HDR/scripts/mod/file2alias.c" "$HDR/scripts/mod/sumversion.c" \
