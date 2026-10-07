@@ -47,6 +47,27 @@ SRCDIR="$(ls -d "$MNT/usr/src/linux-headers-$KREL" 2>/dev/null | head -1)"
 echo "  内核 release : $KREL"
 echo "  头文件目录   : ${SRCDIR#$MNT}"
 
+# 头文件包常见缺 auto.conf/autoconf.h（飞牛基镜像就是），而 BOOT 分区里有完整的
+# config-<rel>。趁 loop 还挂着，把它取出来备用（第 2 步用它生成缺失的配置文件）。
+KCFG_SRC=""
+BOOTP=""
+for c in "${LOOP}p1" "${LOOP}1"; do [[ -e "$c" ]] && BOOTP="$c" && break; done
+if [[ -n "$BOOTP" ]]; then
+    mkdir -p "$WORK/boot"
+    if mount -ro "$BOOTP" "$WORK/boot" 2>/dev/null; then
+        for cand in "$WORK/boot/config-$KREL" "$WORK/boot/config"; do
+            if [[ -f "$cand" ]]; then
+                cp "$cand" "$WORK/kernel.config"
+                KCFG_SRC="$(basename "$cand")"
+                break
+            fi
+        done
+        umount "$WORK/boot" 2>/dev/null || true
+    fi
+fi
+[[ -n "$KCFG_SRC" ]] && echo "  ✓ 取出内核配置: $KCFG_SRC（备用）" \
+                     || echo "  ⚠ BOOT 分区未取到 config-<rel>（若头文件缺 auto.conf 将无法生成）"
+
 cp -a "$SRCDIR" "$HDR/h"
 HDR="$HDR/h"
 chmod -R u+w "$HDR"
@@ -54,8 +75,30 @@ umount "$MNT"; [[ -n "$LOOP" ]] && losetup -d "$LOOP"; LOOP=""
 
 echo
 echo "==== 2) 修补头文件树（三个坑） ===="
-[[ -f "$HDR/.config" ]] || { cp "$HDR/include/config/auto.conf" "$HDR/.config"; echo "  ✓ 用 auto.conf 补出 .config"; }
-grep -qE '^CONFIG_MODULE_SIG_FORCE=y' "$HDR/include/config/auto.conf" 2>/dev/null \
+if [[ ! -f "$HDR/.config" ]]; then
+    if [[ -f "$HDR/include/config/auto.conf" ]]; then
+        cp "$HDR/include/config/auto.conf" "$HDR/.config"
+        echo "  ✓ 用 auto.conf 补出 .config"
+    elif [[ -f "$WORK/kernel.config" ]]; then
+        # 实测坑：飞牛基镜像的 linux-headers 包里【没有】include/config/auto.conf
+        # 与 include/generated/autoconf.h，直接编译会报
+        #   ERROR: Kernel configuration is invalid. The following files are missing:
+        # 用 BOOT 分区的 config-<rel> 作为 .config，再让内核自己生成这两个文件。
+        cp "$WORK/kernel.config" "$HDR/.config"
+        echo "  ✓ 用基镜像 BOOT 的 $KCFG_SRC 补出 .config，正在生成 auto.conf/autoconf.h"
+        make -C "$HDR" ARCH=arm64 olddefconfig >/dev/null 2>&1 || true
+        make -C "$HDR" ARCH=arm64 prepare scripts >/dev/null 2>&1 || true
+        [[ -f "$HDR/include/config/auto.conf" ]] \
+            || { echo "✗ 无法生成 include/config/auto.conf"; exit 1; }
+        [[ -f "$HDR/include/generated/autoconf.h" ]] \
+            || { echo "✗ 无法生成 include/generated/autoconf.h"; exit 1; }
+        echo "  ✓ auto.conf 与 autoconf.h 已生成"
+    else
+        echo "✗ 头文件树缺 include/config/auto.conf，且 BOOT 分区里也没取到内核 config"
+        exit 1
+    fi
+fi
+grep -qE '^CONFIG_MODULE_SIG_FORCE=y' "$HDR/.config" 2>/dev/null \
     && { echo "✗ 该内核强制模块签名，自编模块无法加载"; exit 1; } \
     || echo "  ✓ 内核未强制模块签名"
 for t in scripts/basic/fixdep scripts/mod/modpost; do
