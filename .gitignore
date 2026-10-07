@@ -1,0 +1,4 @@
+base/
+out/
+*.img
+*.img.xz

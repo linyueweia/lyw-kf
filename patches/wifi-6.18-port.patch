@@ -1,0 +1,308 @@
+diff --git a/drivers/seekwaveplatform_lite/skwutil/skw_boot.h b/drivers/seekwaveplatform_lite/skwutil/skw_boot.h
+index 453d0b0..0b8b116 100644
+--- a/drivers/seekwaveplatform_lite/skwutil/skw_boot.h
++++ b/drivers/seekwaveplatform_lite/skwutil/skw_boot.h
+@@ -68,11 +68,9 @@
+ 
+ #ifdef CONFIG_NO_GKI
+ #if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
+-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+ #endif
+ #else
+ #if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
+-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+ #endif
+ #endif
+ 
+diff --git a/drivers/swt6621s_wifi/Makefile b/drivers/swt6621s_wifi/Makefile
+index 9e349f5..4012686 100644
+--- a/drivers/swt6621s_wifi/Makefile
++++ b/drivers/swt6621s_wifi/Makefile
+@@ -40,9 +40,11 @@ ifneq ($(CONFIG_SWT6621S_EXTERNAL_REGDB),y)
+ ccflags-y += -DCONFIG_SWT6621S_REGD_SELF_MANAGED
+ endif
+ 
+-ifeq ($(CONFIG_ARCH_ROCKCHIP),y)
+-ccflags-y += -DCONFIG_PLATFORM_ROCKCHIP
+-endif
++# fnOS 6.18.18-trim 内核无 Rockchip BSP 助手 rockchip_wifi_mac_addr()
++# （头文件 linux/rfkill-wlan.h 不存在，且该符号未导出），故关闭该平台分支
++#ifeq ($(CONFIG_ARCH_ROCKCHIP),y)
++#ccflags-y += -DCONFIG_PLATFORM_ROCKCHIP
++#endif
+ 
+ ifneq ($(filter y,$(CONFIG_ANDROID_BINDER_IPC) $(CONFIG_SKW_ANDROID)),)
+ ccflags-y += -D__SKW_ANDROID__
+@@ -61,7 +63,7 @@ ccflags-y += -I$(srctree)/include/linux/platform_data/
+ CFLAGS_trace.o := -I$(src)
+ $(obj)/skw_core.o : $(obj)/version.h
+ 
+-skw_abs_path := $(addprefix $(abspath $(srctree))/,$(filter-out /%,$(src)))$(filter /%,$(src))
++skw_abs_path := $(abspath $(src))
+ $(obj)/version.h: $(skw_abs_path)/genver.pl
+ 	@$(PERL) -s $(skw_abs_path)/genver.pl $@
+ 
+diff --git a/drivers/swt6621s_wifi/skw_cfg80211.c b/drivers/swt6621s_wifi/skw_cfg80211.c
+index 94001c7..66f5b07 100644
+--- a/drivers/swt6621s_wifi/skw_cfg80211.c
++++ b/drivers/swt6621s_wifi/skw_cfg80211.c
+@@ -3207,7 +3207,7 @@ int skw_sta_leave(struct wiphy *wiphy, struct net_device *dev,
+ 
+ 	memset(&iface->wmm, 0x0, sizeof(iface->wmm));
+ 
+-	del_timer_sync(&iface->sta.core.timer);
++	timer_delete_sync(&iface->sta.core.timer);
+ 
+ 	skw_set_state(&iface->sta.core.sm, SKW_STATE_NONE);
+ 	iface->sta.core.sm.flags = 0;
+@@ -3456,7 +3456,7 @@ static int skw_assoc(struct wiphy *wiphy, struct net_device *dev,
+ 
+ 		core->cbss = NULL;
+ 
+-		del_timer_sync(&core->timer);
++		timer_delete_sync(&core->timer);
+ 
+ 		skw_unjoin(wiphy, dev, req->bss->bssid, SKW_LEAVE, false);
+ 		skw_set_state(&core->sm, SKW_STATE_NONE);
+@@ -4278,7 +4278,11 @@ static int skw_leave_ibss(struct wiphy *wiphy, struct net_device *dev)
+ 			&params, sizeof(params), NULL, 0);
+ }
+ 
+-static int skw_set_wiphy_params(struct wiphy *wiphy, u32 changed)
++static int skw_set_wiphy_params(struct wiphy *wiphy,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++		int radio_idx,
++#endif
++		u32 changed)
+ {
+ 	int ret = 0;
+ 	struct skw_tlv_conf conf;
+@@ -5307,6 +5311,9 @@ static int skw_change_bss(struct wiphy *wiphy, struct net_device *dev,
+ }
+ 
+ static int skw_set_monitor_channel(struct wiphy *wiphy,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++		struct net_device *dev,
++#endif
+ 		struct cfg80211_chan_def *chandef)
+ {
+ 	return skw_cmd_monitor(wiphy, chandef, SKW_MONITOR_COMMON);
+diff --git a/drivers/swt6621s_wifi/skw_core.c b/drivers/swt6621s_wifi/skw_core.c
+index e085fdc..c0e1b07 100644
+--- a/drivers/swt6621s_wifi/skw_core.c
++++ b/drivers/swt6621s_wifi/skw_core.c
+@@ -1515,19 +1515,16 @@ static struct wakeup_source *skw_wakeup_source_init(const char *name)
+ {
+ 	struct wakeup_source *ws;
+ 
+-	ws = wakeup_source_create(name);
+-	if (ws)
+-		wakeup_source_add(ws);
++	/* 6.18: wakeup_source_create()/add() 已移除，统一用 register() */
++	ws = wakeup_source_register(NULL, name);
+ 
+ 	return ws;
+ }
+ 
+ static void skw_wakeup_source_deinit(struct wakeup_source *ws)
+ {
+-	if (ws) {
+-		wakeup_source_remove(ws);
+-		wakeup_source_destroy(ws);
+-	}
++	if (ws)
++		wakeup_source_unregister(ws);
+ }
+ 
+ static void skw_hw_hal_init(struct skw_core *skw, struct sv6160_platform_data *pdata)
+@@ -1734,7 +1731,8 @@ static int skw_core_init(struct skw_core *skw, struct platform_device *pdev, int
+ 	atomic_set(&skw->txqlen_pending, 0);
+ 
+ 	spin_lock_init(&skw->dfs.skw_pool_lock);
+-	hrtimer_init(&skw->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	/* 6.18: hrtimer_init() 已移除，hrtimer_setup() 同时完成 init+设置回调 */
++	hrtimer_setup(&skw->timer, skw_tx_timer_callback, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	spin_lock_init(&skw->timer_lock);
+ 	INIT_LIST_HEAD(&skw->dfs.skw_pulse_pool);
+ 	INIT_LIST_HEAD(&skw->dfs.skw_pseq_pool);
+@@ -2487,7 +2485,10 @@ static int skw_drv_remove(struct platform_device *pdev)
+ 
+ static struct platform_driver skw_drv = {
+ 	.probe = skw_drv_probe,
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++	/* 6.13+ platform_driver::remove 改为返回 void，remove_new 字段已删除 */
++	.remove = skw_drv_remove_new,
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+ 	.remove_new = skw_drv_remove_new,
+ #else
+ 	.remove = skw_drv_remove,
+diff --git a/drivers/swt6621s_wifi/skw_iface.c b/drivers/swt6621s_wifi/skw_iface.c
+index 54aa16e..953eaa4 100644
+--- a/drivers/swt6621s_wifi/skw_iface.c
++++ b/drivers/swt6621s_wifi/skw_iface.c
+@@ -753,7 +753,7 @@ static void skw_mode_deinit(struct wiphy *wiphy, struct skw_iface *iface,
+ 			SKW_KFREE(iface->sta.conn);
+ 		}
+ 
+-		del_timer_sync(&iface->sta.core.timer);
++		timer_delete_sync(&iface->sta.core.timer);
+ 		cancel_work_sync(&iface->sta.work);
+ 
+ 		skw_set_state(&iface->sta.core.sm, SKW_STATE_NONE);
+diff --git a/drivers/swt6621s_wifi/skw_recovery.c b/drivers/swt6621s_wifi/skw_recovery.c
+index f68579c..5670f35 100644
+--- a/drivers/swt6621s_wifi/skw_recovery.c
++++ b/drivers/swt6621s_wifi/skw_recovery.c
+@@ -89,7 +89,7 @@ static int skw_recovery_sta(struct wiphy *wiphy, struct skw_recovery_data *rd,
+ 			continue;
+ 
+ 		if (ether_addr_equal(peer->addr, core->bss.bssid)) {
+-			del_timer_sync(&core->timer);
++			timer_delete_sync(&core->timer);
+ 			cancel_work_sync(&iface->sta.work);
+ 
+ 			ret = skw_cmd_unjoin(wiphy, dev, peer->addr,
+diff --git a/drivers/swt6621s_wifi/skw_rx.c b/drivers/swt6621s_wifi/skw_rx.c
+index 9bd83f3..37fbe36 100644
+--- a/drivers/swt6621s_wifi/skw_rx.c
++++ b/drivers/swt6621s_wifi/skw_rx.c
+@@ -885,7 +885,7 @@ static void skw_reorder_force_release(struct skw_tid_rx *tid_rx,
+ 	    atomic_read(&tid_rx->reorder->ref_cnt) == tid_rx->ref_cnt &&
+ 	    (ieee80211_sn_less(tid_rx->reorder->expired.sn, to_sn) ||
+ 	     ieee80211_sn_less(to_sn, tid_rx->win_start)))
+-		del_timer(&tid_rx->reorder->timer);
++		timer_delete(&tid_rx->reorder->timer);
+ 
+ 	while (ieee80211_sn_less(tid_rx->win_start, target)) {
+ 		struct sk_buff_head *list;
+@@ -952,7 +952,7 @@ static void skw_reorder_release(struct skw_reorder_rx *reorder,
+ 	for (i = 0; i < tid_rx->win_size; i++) {
+ 		if (tid_rx->stored_num == 0) {
+ 			if (timer_pending(&reorder->timer))
+-				del_timer(&reorder->timer);
++				timer_delete(&reorder->timer);
+ 
+ 			break;
+ 		}
+@@ -986,7 +986,7 @@ static void skw_reorder_release(struct skw_reorder_rx *reorder,
+ 
+ 			if (timer_pending(&reorder->timer) &&
+ 			    reorder->expired.sn == tid_rx->win_start)
+-				del_timer(&reorder->timer);
++				timer_delete(&reorder->timer);
+ 
+ 			if (SKW_SKB_RXCB(skb)->amsdu_flags & SKW_AMSDU_FLAG_TAINT) {
+ 				__skb_queue_purge(list);
+@@ -1188,7 +1188,7 @@ static void skw_ampdu_reorder(struct skw_core *skw, struct skw_rx_desc *desc,
+ 
+ 		if (timer_pending(&reorder->timer) &&
+ 			reorder->expired.sn == tid_rx->win_start)
+-			del_timer(&reorder->timer);
++			timer_delete(&reorder->timer);
+ 
+ 		tid_rx->win_start = ieee80211_sn_inc(tid_rx->win_start);
+ 
+@@ -1216,7 +1216,7 @@ out:
+ 			skw_set_reorder_timer(tid_rx, desc->sn);
+ 	} else {
+ 		if (timer_pending(&reorder->timer))
+-			del_timer(&reorder->timer);
++			timer_delete(&reorder->timer);
+ 	}
+ }
+ 
+@@ -1645,7 +1645,7 @@ int skw_del_tid_rx(struct skw_peer *peer, u16 tid)
+ 
+ 	smp_wmb();
+ 
+-	del_timer_sync(&reorder->timer);
++	timer_delete_sync(&reorder->timer);
+ 
+ 	if (tid_rx) {
+ #ifdef CONFIG_SWT6621S_GKI_DRV
+diff --git a/drivers/swt6621s_wifi/skw_timer.c b/drivers/swt6621s_wifi/skw_timer.c
+index 11421ad..e13b82a 100644
+--- a/drivers/swt6621s_wifi/skw_timer.c
++++ b/drivers/swt6621s_wifi/skw_timer.c
+@@ -220,7 +220,7 @@ void skw_timer_deinit(struct skw_core *skw)
+ {
+ 	LIST_HEAD(flush_list);
+ 
+-	del_timer(&skw->timer_data.timer);
++	timer_delete(&skw->timer_data.timer);
+ 
+ 	spin_lock_bh(&skw->timer_data.lock);
+ 	list_replace_init(&skw->timer_data.list, &flush_list);
+diff --git a/drivers/swt6621s_wifi/skw_util.c b/drivers/swt6621s_wifi/skw_util.c
+index 28baab1..184db74 100644
+--- a/drivers/swt6621s_wifi/skw_util.c
++++ b/drivers/swt6621s_wifi/skw_util.c
+@@ -85,7 +85,6 @@ void skw_file_close(struct file *fp)
+ 	filp_close(fp, NULL);
+ }
+ 
+-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+ #endif
+ 
+ int skw_key_idx(unsigned long bitmap)
+diff --git a/drivers/swtbt4l/skw_btdriver.c b/drivers/swtbt4l/skw_btdriver.c
+index 4e03e5e..f9a21c1 100755
+--- a/drivers/swtbt4l/skw_btdriver.c
++++ b/drivers/swtbt4l/skw_btdriver.c
+@@ -1124,6 +1124,14 @@ static int btseekwave_remove(struct platform_device *pdev)
+     return 0;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++/* 6.13+ platform_driver::remove 返回 void，包一层适配旧 int 回调 */
++static void btseekwave_remove_void(struct platform_device *pdev)
++{
++    btseekwave_remove(pdev);
++}
++#endif
++
+ static struct platform_driver  btseekwave_driver =
+ {
+     .driver = {
+@@ -1132,7 +1140,12 @@ static struct platform_driver  btseekwave_driver =
+         .pm     = NULL,
+     },
+     .probe      = btseekwave_probe,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++    /* 6.13+ platform_driver::remove 返回 void，旧 int 版回调不再匹配 */
++    .remove     = btseekwave_remove_void,
++#else
+     .remove     = btseekwave_remove,
++#endif
+ };
+ 
+ int  btseekwave_init(void)
+diff --git a/drivers/swtbt4l/skw_btlog.c b/drivers/swtbt4l/skw_btlog.c
+index 410c358..482bf3c 100755
+--- a/drivers/swtbt4l/skw_btlog.c
++++ b/drivers/swtbt4l/skw_btlog.c
+@@ -385,7 +385,11 @@ void skwbt_log_port_init(void)
+         memset(skwbt_log_port_info, 0, val_size);
+         skwbt_log_port_info->is_open = 0;
+ 
++#if (KERNEL_VERSION(6, 4, 0) <= LINUX_VERSION_CODE)
++        skwbt_log_port_info->skwbt_class = class_create("skwbtlog_port");
++#else
+         skwbt_log_port_info->skwbt_class = class_create(THIS_MODULE, "skwbtlog_port");
++#endif
+         if(IS_ERR(skwbt_log_port_info->skwbt_class))
+         {
+             //int ret =  PTR_ERR(skwbt_proc_log_info->skwbt_class);
+diff --git a/drivers/swtbt4l/skw_common.h b/drivers/swtbt4l/skw_common.h
+index 067cefe..bff5175 100755
+--- a/drivers/swtbt4l/skw_common.h
++++ b/drivers/swtbt4l/skw_common.h
+@@ -107,7 +107,6 @@
+ #endif
+ 
+ #ifdef CONFIG_NO_GKI
+-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+ #endif
+ 
+ typedef struct

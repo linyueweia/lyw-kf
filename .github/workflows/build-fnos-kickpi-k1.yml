@@ -1,0 +1,160 @@
+#==========================================================================
+# 为 KICKPI K1 V1.2 (RK3568B2) 构建可启动的飞牛 fnOS ARM64 固件镜像
+#
+# 设计要点：
+#   · 不改飞牛内核（保住文件回收站/权限管理等 FilesACL 依赖的特性）
+#   · 只做三件事：换本板 DTB、注入本板所需树外模块、写对本板引导配置
+#   · 引导链六环静态验证作为【硬门禁】，不过就不出产物
+#   · root= 一律用镜像自身 rootfs 的 PARTUUID，绝不出现 /dev/mmcblk0* 或厂商 eMMC PARTUUID
+#==========================================================================
+name: Build fnOS KICKPI K1 Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image_tag:
+        description: "fnnas-base-images 的 release tag（基镜像来源）"
+        required: false
+        default: "v1.0.0"
+        type: string
+      base_image_asset:
+        description: "基镜像资产名"
+        required: false
+        default: "fnnas-official-arm64-image_rockchip.img.gz"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "dts/**"
+      - "dist/**"
+      - "modules/**"
+      - "uboot/**"
+      - "*.sh"
+      - ".github/workflows/**"
+
+permissions:
+  contents: write
+
+env:
+  TZ: Etc/UTC
+
+jobs:
+  build:
+    name: Build fnOS image for KICKPI K1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space (基镜像 + 产物 xz 需要空间)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xz-utils btrfs-progs device-tree-compiler \
+                                     qemu-user-static file kmod
+
+      - name: Cache fnOS base image
+        id: basecache
+        uses: actions/cache@v4
+        with:
+          path: base
+          key: fnnas-base-${{ inputs.base_image_tag || 'v1.0.0' }}-${{ inputs.base_image_asset || 'fnnas-official-arm64-image_rockchip.img.gz' }}
+
+      - name: Fetch and unpack fnOS base image
+        run: |
+          set -e
+          TAG="${{ inputs.base_image_tag || 'v1.0.0' }}"
+          ASSET="${{ inputs.base_image_asset || 'fnnas-official-arm64-image_rockchip.img.gz' }}"
+          mkdir -p base
+          if [[ ! -f base/fnnas-base.img ]]; then
+            URL="https://github.com/linyueweia/fnnas-base-images/releases/download/${TAG}/${ASSET}"
+            echo "  下载基镜像: $URL"
+            curl -fL --retry 3 -o base/base.img.gz "$URL"
+            gzip -t base/base.img.gz
+            echo "  解压…"
+            gunzip -c base/base.img.gz > base/fnnas-base.img
+            rm -f base/base.img.gz
+          fi
+          ls -la base/
+          echo "  分区表:"
+          sudo parted -s base/fnnas-base.img unit s print || true
+
+      - name: Report boot material (u-boot pair / DTB / modules)
+        run: |
+          echo "── u-boot 对 ──"
+          ls -la uboot/rk3568/kickpi-k1/ || true
+          if [[ -f uboot/rk3568/kickpi-k1/idbloader.img ]]; then
+            echo "  使用仓库内 u-boot 对（应为为本板编译的那一份）"
+            strings uboot/rk3568/kickpi-k1/idbloader.img | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -2 || true
+            if strings uboot/rk3568/kickpi-k1/idbloader.img | grep -q 'V1.18 f366f69a7d'; then
+              echo "::error::idbloader 是 T68M 的 DDR V1.18，与本板 1560MHz 不匹配"
+              exit 1
+            fi
+          else
+            echo "  ⚠ 仓库内无 u-boot 对 → 保留基镜像自带 bootloader（UBOOT_MODE=keep）"
+          fi
+          echo "── DTB ──"; ls -la dist/
+          echo "── 模块 ──"; find modules -name '*.ko' -exec ls -la {} \;
+
+      - name: Assemble fnOS image
+        run: |
+          set -e
+          if [[ -f uboot/rk3568/kickpi-k1/idbloader.img ]]; then
+            UBOOT_DIR=uboot/rk3568/kickpi-k1
+          else
+            UBOOT_DIR=""
+          fi
+          sudo -E BASE=base/fnnas-base.img \
+                  UBOOT_DIR="$UBOOT_DIR" \
+                  DTB=dist/rk3568-kickpi-k1.dtb \
+                  MODULES_DIR=modules \
+                  DEVICE_LABEL=KICKPI-K1 \
+                  BUILD_NUM="${{ github.run_number }}" \
+                  OUT_DIR=out \
+                  bash build-k1-fnos.sh
+          ls -la out/
+
+      - name: Verify boot chain (六环硬门禁)
+        run: |
+          set -e
+          IMG="$(ls out/*.img | head -1)"
+          echo "验证镜像: $IMG"
+          sudo -E bash verify-fnos-bootchain.sh "$IMG"
+
+      - name: Show outputs
+        run: |
+          ls -la out/
+          cat out/SHA256SUMS || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fnos-kickpi-k1-${{ github.run_number }}
+          path: |
+            out/*.img.xz
+            out/SHA256SUMS
+          retention-days: 14
+          compression-level: 0
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: fnos_kickpi-k1_${{ github.run_number }}
+          name: fnOS KICKPI K1 #${{ github.run_number }}
+          body: |
+            为 KICKPI K1 V1.2 (RK3568B2) 构建的飞牛 fnOS ARM64 镜像。
+            合并：先机 DTB + 本板 maxio.ko(SWT6621S WiFi/BT 模块)
+            引导链六环静态验证已通过。上机前请确认刷写目标是 SD 卡。
+          files: |
+            out/*.img.xz
+            out/SHA256SUMS
+          fail_on_unmatched_files: true
