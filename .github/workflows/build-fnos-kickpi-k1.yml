@@ -260,7 +260,12 @@ jobs:
           set -e
           IMG="$(ls out/*.img | head -1)"
           echo "验证镜像: $IMG"
-          sudo -E bash verify-fnos-bootchain.sh "$IMG"
+          if [[ "${{ inputs.with_modules }}" == "false" ]]; then
+            EXP=0
+          else
+            EXP=1
+          fi
+          sudo -E EXPECT_MODULES="$EXP" bash verify-fnos-bootchain.sh "$IMG"
 
       - name: Show outputs
         run: |
