@@ -228,7 +228,8 @@ jobs:
         run: |
           set -e
           chmod +x build-modules.sh
-          bash build-modules.sh base/fnnas-base.img built-modules \
+          # 必须 root：脚本要 losetup 挂载镜像分区取内核头文件
+          sudo -E bash build-modules.sh base/fnnas-base.img built-modules \
                https://github.com/retro98boy/seekwave-swt6621s
           ls -la built-modules/
 
