@@ -162,7 +162,22 @@ fi
 [[ -x "$HDR/scripts/mod/modpost" ]] || { echo "✗ modpost 仍不可用（没有它产物不会有 vermagic，加载不了）"; exit 1; }
 echo "  ✓ 主机工具就绪"
 
-MAKEFLAGS_COMMON=(-C "$HDR" ARCH=arm64 CONFIG_INIT_STACK_ALL_ZERO= modules)
+# 目标代码是 arm64，必须用交叉编译器。踩过的坑：CI runner 默认只有 x86_64 gcc，
+# 不设 CROSS_COMPILE 时会用宿主 gcc 去编 arm64，报一堆
+#   gcc: error: unrecognized command-line option '-mlittle-endian'
+#        unrecognized option '-mbranch-protection=pac-ret' 等
+XCC="${CROSS_COMPILE:-aarch64-linux-gnu-}"
+if ! command -v "${XCC}gcc" >/dev/null 2>&1; then
+    echo "  · 缺 ${XCC}gcc，尝试安装 gcc-aarch64-linux-gnu"
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq gcc-aarch64-linux-gnu >/dev/null 2>&1 || true
+fi
+command -v "${XCC}gcc" >/dev/null 2>&1 \
+    || { echo "✗ 缺交叉编译器 ${XCC}gcc（arm64 模块无法编译）"; exit 1; }
+echo "  ✓ 交叉编译器: $(command -v "${XCC}gcc")  ($("${XCC}gcc" -dumpversion))"
+
+MAKEFLAGS_COMMON=(-C "$HDR" ARCH=arm64 CONFIG_INIT_STACK_ALL_ZERO= \
+                  CROSS_COMPILE="$XCC" modules)
 
 echo
 echo "==== 3) 编译 maxio.ko ===="
