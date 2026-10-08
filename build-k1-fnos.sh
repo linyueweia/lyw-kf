@@ -251,6 +251,55 @@ EOF
     fi
 fi
 
+    # ── 修复飞牛自带扩容脚本的缺陷（实机实测的"重启黑屏"根因）──────────────────
+    # /usr/trim/bin/resize-rootfs.sh 用 fdisk「先 d 删分区、再 n 新建」来扩容；
+    # 本板镜像分区表是 GPT —— 分区重建会换掉随机 PARTUUID，于是【下一次启动】
+    # root=PARTUUID=<旧值> 失配，卡在 "Waiting for root device"（首启正常、重启黑屏）。
+    # 做法：包一层 —— 扩容前记下 PARTUUID，脚本跑完后用 sfdisk 写回，root= 始终有效。
+    if [[ -f "$ROOT_MNT/usr/trim/bin/resize-rootfs.sh" ]]; then
+        cp -f "$ROOT_MNT/usr/trim/bin/resize-rootfs.sh" \
+              "$ROOT_MNT/usr/trim/bin/resize-rootfs.sh.orig" 2>/dev/null || true
+        cat > "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh" <<'WRAP'
+#!/bin/bash
+# KICKPI K1：飞牛自带 resize-rootfs.sh 用 fdisk 删/建分区扩容，会更换 GPT 的
+# PARTUUID，导致下次启动 root=PARTUUID 失配（实测停在 "Waiting for root device"）。
+# 这里在调用前后把原 PARTUUID 记下并写回。
+rootdev=$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~')
+old_puuid="$(blkid -s PARTUUID -o value "$rootdev" 2>/dev/null)"
+diskdevname=$(lsblk -n -d -o PKNAME "$rootdev")
+[[ -z "$diskdevname" ]] && diskdevname=$(echo "$rootdev" | sed -e 's/^\/dev\///' | sed 's/p.*//')
+diskdev="/dev/$diskdevname"
+partindex=$(echo "$rootdev" | sed "s|^$diskdev||" | sed 's/^p//')
+
+/usr/trim/bin/resize-rootfs.sh
+rc=$?
+
+if [[ -n "$old_puuid" ]]; then
+    if sfdisk --part-uuid "$diskdev" "$partindex" "$old_puuid" >/dev/null 2>&1; then
+        echo "KICKPI-K1: PARTUUID restored: $old_puuid"
+    else
+        echo "KICKPI-K1: WARNING failed to restore PARTUUID $old_puuid"
+    fi
+    partprobe "$diskdev" 2>/dev/null || true
+fi
+exit $rc
+WRAP
+        chmod +x "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh"
+        if [[ -f "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" ]]; then
+            cp -f "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" \
+                  "$ROOT_MNT/etc/systemd/system/resize-rootfs.service.orig" 2>/dev/null || true
+            sed -i 's#^ExecStart=/usr/trim/bin/resize-rootfs\.sh$#ExecStart=/usr/trim/bin/resize-rootfs-kickpi-k1.sh#' \
+                "$ROOT_MNT/etc/systemd/system/resize-rootfs.service"
+        fi
+        # 自证：包层脚本就位、单元已改指
+        [[ -x "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh" ]] || fail "扩容包层脚本未就位"
+        grep -q 'resize-rootfs-kickpi-k1.sh' "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" \
+            || fail "resize-rootfs.service 未指向包层脚本（扩容后 PARTUUID 会被换掉 → 重启黑屏）"
+        echo "  ✓ 已修补 resize-rootfs（扩容后写回 PARTUUID，消除重启 'Waiting for root device'）"
+    else
+        echo "  ℹ 基镜像无 /usr/trim/bin/resize-rootfs.sh，跳过扩容补丁"
+    fi
+
 # OTA 引导同步脚本（若基镜像自带则保留）
 # umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（明明该做的都做完了）。
 # 先 sync 落盘，再重试，最后惰性卸载兜底。
