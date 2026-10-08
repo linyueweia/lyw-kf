@@ -156,14 +156,58 @@ jobs:
         run: |
           echo "── u-boot 对 ──"
           ls -la uboot/rk3568/kickpi-k1/ || true
-          # 【2026-10-08 实测结论·重要】不注入自建 u-boot，UBOOT_DIR 恒留空。
-          # 实测：TF 卡冷启动电源灯亮、系统灯不亮（内核从未运行）→ 自建对在 SPL 阶段就断：
-          #   本板原厂(可用) : DDR v1.23-03ea844c5d + U-Boot SPL 2017.09
-          #   自建(不可用)   : DDR v1.26-5c7dbc4d49 + U-Boot 2023.10(generic-rk3568, BL31 v1.46)
-          # 而飞牛基镜像自带引导件的 DDR 固件正是 ddr-v1.23-03ea844c5d，与本板 eMMC 原厂
-          # 同版本同哈希 —— 基镜像的引导链本就是对的，覆盖反而坏事。
-          # （uboot/rk3568/kickpi-k1/ 下的素材仍保留，作为换 loader 时的材料 + DDR 断言对象。）
-          UBOOT_DIR=""
+          if [[ -f uboot/rk3568/kickpi-k1/idbloader.img ]]; then
+            echo "  使用仓库内 u-boot 对（应为为本板编译的那一份）"
+            strings uboot/rk3568/kickpi-k1/idbloader.img | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -2 || true
+            if strings uboot/rk3568/kickpi-k1/idbloader.img | grep -q 'V1.18 f366f69a7d'; then
+              echo "::error::idbloader 是 T68M 的 DDR V1.18，与本板 1560MHz 不匹配"
+              exit 1
+            fi
+          else
+            echo "  ⚠ 仓库内无 u-boot 对 → 保留基镜像自带 bootloader（UBOOT_MODE=keep）"
+          fi
+          echo "── DTB ──"; ls -la dist/
+          echo "── 模块 ──"; find modules -name '*.ko' -exec ls -la {} \;
+
+      - name: Diagnose base image kernel / headers
+        run: |
+          set -e
+          IMG=base/fnnas-base.img
+          LOOP=$(sudo losetup -fP --show "$IMG")
+          sudo mkdir -p /mnt/dbg_boot /mnt/dbg_root
+          sudo mount "${LOOP}p1" /mnt/dbg_boot || true
+          echo "── BOOT(vmlinuz/config/System.map) ──"
+          ls /mnt/dbg_boot | grep -E '^(vmlinuz|config|System.map)' | sed 's/^/   /' || true
+          sudo umount /mnt/dbg_boot || true
+          sudo mount "${LOOP}p2" /mnt/dbg_root || true
+          echo "── rootfs: /usr/lib/modules ──"
+          sudo ls /mnt/dbg_root/usr/lib/modules 2>/dev/null | sed 's/^/   /' || echo "   (无)"
+          echo "── rootfs: /usr/src（内核头文件？）──"
+          sudo ls /mnt/dbg_root/usr/src 2>/dev/null | sed 's/^/   /' || echo "   (无)"
+          for d in $(sudo ls -d /mnt/dbg_root/usr/src/* 2>/dev/null); do
+            echo "   [$d] Module.symvers=$([[ -f $d/Module.symvers ]] && echo yes || echo no) \
+                  auto.conf=$([[ -f $d/include/config/auto.conf ]] && echo yes || echo no) \
+                  Makefile=$([[ -f $d/Makefile ]] && echo yes || echo no)"
+          done
+          echo "── 模块目录内容（前 15） ──"
+          for m in $(sudo ls -d /mnt/dbg_root/usr/lib/modules/* 2>/dev/null); do
+            echo "   [$m]"; sudo ls "$m" | head -15 | sed 's/^/      /'
+          done
+          sudo umount /mnt/dbg_root || true
+          sudo losetup -d "$LOOP" || true
+
+      - name: Build board modules from base image headers
+        if: env.WITH_MODULES == 'true'
+        run: |
+          set -e
+          chmod +x build-modules.sh
+          # 必须 root：脚本要 losetup 挂载镜像分区取内核头文件
+          sudo -E bash build-modules.sh base/fnnas-base.img built-modules \
+               https://github.com/retro98boy/seekwave-swt6621s
+          ls -la built-modules/
+
+      - name: Note module plan
+        run: |
           if [[ "$WITH_MODULES" == "false" ]]; then
             echo "本阶段不注入模块：只验证引导链（DTB + 引导配置）"
           else
@@ -179,22 +223,14 @@ jobs:
       - name: Assemble fnOS image
         run: |
           set -e
-          if [[ -f uboot/rk3568/kickpi-k1/idbloader.img ]]; then
-            # 【2026-10-08 实测结论·重要】不再注入自建 u-boot。
-            # 实测现象：TF 卡冷启动，电源灯亮、系统灯不亮（内核从未运行），
-            # 机器回落到 eMMC 系统 → 引导链在 SPL 阶段就断了。
-            # 取证（卡 vs 本板 eMMC 原厂引导件）：
-            #   本板原厂(可用) : DDR v1.23-03ea844c5d + U-Boot SPL 2017.09
-            #   自建(不可用)   : DDR v1.26-5c7dbc4d49 + U-Boot 2023.10(generic-rk3568, BL31 v1.46)
-            #   前 1MiB 逐段(32K/64K/…/512K)全部不同，属两套不同引导架构。
-            # 而飞牛基镜像【自带】引导件的 DDR 固件 = ddr-v1.23-03ea844c5d，
-            # 与本板 eMMC 原厂那份同版本同哈希 —— 说明基镜像的引导链本就是对的，
-            # 被我们覆盖反而坏事。故这里留空，走 build-k1-fnos.sh 的
-            # "保留基镜像自带 bootloader" 分支（脚本注释即称其为最稳打法）。
-            UBOOT_DIR=""
-          else
-            UBOOT_DIR=""
-          fi
+          # 【2026-10-08 实测结论·重要】不注入自建 u-boot，UBOOT_DIR 恒留空。
+          # 实测：TF 卡冷启动电源灯亮、系统灯不亮（内核从未运行）→ 自建对在 SPL 阶段就断：
+          #   本板原厂(可用) : DDR v1.23-03ea844c5d + U-Boot SPL 2017.09
+          #   自建(不可用)   : DDR v1.26-5c7dbc4d49 + U-Boot 2023.10(generic-rk3568, BL31 v1.46)
+          # 而飞牛基镜像自带引导件的 DDR 固件正是 ddr-v1.23-03ea844c5d，与本板 eMMC 原厂
+          # 同版本同哈希 —— 基镜像的引导链本就是对的，覆盖反而坏事。
+          # （uboot/rk3568/kickpi-k1/ 下的素材仍保留，作为换 loader 时的材料 + Report 步骤的 DDR 断言对象。）
+          UBOOT_DIR=""
           if [[ "$WITH_MODULES" == "false" ]]; then
             MODDIR=""
             echo "  本阶段不注入模块：只验证引导链"
