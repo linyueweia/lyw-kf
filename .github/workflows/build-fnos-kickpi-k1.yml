@@ -25,7 +25,12 @@ on:
       base_image_sha256:
         description: "基镜像(解压后) sha256 —— 换基镜像版本时必须同步更新，否则装配硬失败"
         required: false
-        default: "d0f4d40ba82966720d6cbc39f22100192c50b9a7a4a4ba219ff5eceada61a216"
+        # 取值出处：run 37843446860 的 'Fetch and unpack fnOS base image' 步骤实测
+        # （v1.0.0 / fnnas-official-arm64-image_rockchip.img.gz 解压后）。
+        # 注意：本地取证用的那份 base.img 实测是 d0f4d40ba82966720d6cbc39f22100192c50b9a7a4a4ba219ff5eceada61a216，
+        # 与发布资产不逐字节一致（结构完全相同：KREL 6.18.18.c951-trim、header、fstab 均一致），
+        # 故以 CI 实取值为准 —— 门禁挡的是「流水线会拿到的东西」。
+        default: "4ad44904ee1a831ae314699a86d5b7402eb4932c18a01629efbfd78f9148ea31"
         type: string
       with_modules:
         description: "是否注入板级模块（需与基镜像内核匹配的 .ko；关闭则只验证引导链）"
@@ -129,8 +134,8 @@ jobs:
             rm -f base/base.img.gz
           fi
           # 基镜像来源断言（取证 A3 缺口：此前只有 gzip -t，换版/损坏无门禁）
-          # 默认值 = 取证阶段用同一份基镜像跑通全部装配与门禁时的实测 sha256
-          EXPECT_SHA="${{ inputs.base_image_sha256 || 'd0f4d40ba82966720d6cbc39f22100192c50b9a7a4a4ba219ff5eceada61a216' }}"
+          # 默认值 = run 37843446860 实测（CI 自己解压出来的那个字节流）
+          EXPECT_SHA="${{ inputs.base_image_sha256 || '4ad44904ee1a831ae314699a86d5b7402eb4932c18a01629efbfd78f9148ea31' }}"
           if [[ -n "$EXPECT_SHA" ]]; then
             GOT="$(sha256sum base/fnnas-base.img | awk '{print $1}')"
             if [[ "$GOT" == "$EXPECT_SHA" ]]; then
