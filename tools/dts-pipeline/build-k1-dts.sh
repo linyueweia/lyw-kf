@@ -24,6 +24,8 @@ echo "== 8.4) 收尾合并（实机属性 → rga/npu/编解码/PCIe-PHY/USB/音
 python3 $S/merge-vendor-final.py | head -2
 echo "== 8.5) 补齐 PHY 节点 reg（缺它 → invalid PHY address → 退化成 Generic PHY）=="
 python3 $S/fix-phy-reg.py | tail -1
+echo "== 8.6) 按新式绑定修 PHY 复位（reset-gpios）+ 清错厂商属性 =="
+python3 $S/fix-phy-reset.py | tail -3
 echo "== 9) dtc 判定 =="
 if dtc -f -Wno-pci_device_reg -Wno-unit_address_vs_reg -I dts -O dtb \
      -o work/rk3568-kickpi-k1.dtb work/k1-final.dts 2>&1 | grep -qE 'ERROR|FATAL'; then

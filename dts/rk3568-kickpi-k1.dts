@@ -1,22 +1,3 @@
-/* ============================================================================
- * KICKPI K1 V1.2 (RK3568B2) 板级 DTS —— 飞牛 fnOS 适配（最终版）
- *
- * 生成方式完全可复现：tools/dts-pipeline/build-k1-dts.sh（11 步，末步 dtc 判定）
- *   1) gen-k1-dts-from-t68m.py     基座：本板身份 / gmac 四延迟 / SDIO / 关无此设备 / 网口 PHY 复位
- *   2) merge-live-nodes.py         并入实机板级节点（数字 phandle → 绝对路径引用）
- *   3) inject-extra-nodes.py       补建缺的稳压器（pcie3/minipcie/gpio-regulator/dc-12v）
- *   4) inject-leds.py              注入 leds 整棵（含 11 个子节点）
- *   5) apply-mainline-soc.py       用【同内核版本主线 DTB】覆盖 SoC 定义（vop/hdmi/gmac/rga/gpu/pcie）
- *   6) align-status-from-live.py   按实机对齐 status（打开被误关设备：SATA/USB3/编解码/NPU/I2C/I2S/PWM…）
- *   7) import-missing-nodes.py     导入实机有而我们没有的节点
- *   8) merge-vendor-final.py       收尾合并（rga/npu/编解码/PCIe-PHY/USB/音频）
- *   9) fix-phy-reg.py              补 ethernet-phy@N 的 reg（缺它 → invalid PHY address → 退化成 Generic PHY）
- *  10) disable-conflict-nodes.py   禁用抢网口引脚设备（spi@fe640000 / serial@fe670000,fe6b0000,fe680000）
- *  11) dtc 判定：0 ERROR/FATAL 才允许产出
- *
- * 实测验证（TF 卡）：网口 PHY 复位+Maxio 驱动、HDMI(VOP)、系统灯、SATA(ahci-dwc)、PCIe、
- *   编解码 mpp-srv 链接、NPU/GPU OPP、USB 等；配套 OS 层修复见 build-k1-fnos.sh 第 4b 段。
- * ============================================================================ */
 /dts-v1/;
 
 / {
@@ -1104,12 +1085,14 @@
 			phandle = <0x10a>;
 
 			ethernet-phy@0 {
+				reset-gpios = <&{/pinctrl/gpio@fe760000} 0x07 0x01>;
+
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
-				realtek,led1-triggers = "activity";
-				realtek,led2-triggers = "link-10\0link-100\0link-1000";
 				phandle = <0x57>;
-			};
+			
+				reset-assert-us = <20000>;
+				reset-deassert-us = <100000>;};
 		};
 
 		stmmac-axi-config {
@@ -1124,7 +1107,11 @@
 			phandle = <0x4f>;
 
 			queue0 {
-			};
+				reset-gpios = <&{/pinctrl/gpio@fe760000} 0x07 0x01>;
+
+			
+				reset-assert-us = <20000>;
+				reset-deassert-us = <100000>;};
 		};
 
 		tx-queues-config {
@@ -5129,12 +5116,14 @@
 			phandle = <0x27f>;
 
 			ethernet-phy@0 {
+				reset-gpios = <&{/pinctrl/gpio@fe750000} 0x1b 0x01>;
+
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
-				realtek,led1-triggers = "activity";
-				realtek,led2-triggers = "link-10\0link-100\0link-1000";
 				phandle = <0xd4>;
-			};
+			
+				reset-assert-us = <20000>;
+				reset-deassert-us = <100000>;};
 		};
 
 		stmmac-axi-config {
@@ -5149,7 +5138,11 @@
 			phandle = <0xcd>;
 
 			queue0 {
-			};
+				reset-gpios = <&{/pinctrl/gpio@fe750000} 0x1b 0x01>;
+
+			
+				reset-assert-us = <20000>;
+				reset-deassert-us = <100000>;};
 		};
 
 		tx-queues-config {

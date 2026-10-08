@@ -1,8 +1,31 @@
-修 resize-rootfs 补丁的单元定位：基镜像里单元在 /usr/lib/systemd/system（此前只找 /etc）
+网口 PHY：改用【新式绑定】reset-gpios（PHY 节点）+ 清掉 T68M 残留的 realtek 属性；
+补 PHY reg；DTS 与同内核主线逐节点对齐（0 差异）
 
-上次构建（37726365951）正是被这条自证拦下的：
-  ✗ resize-rootfs.service 未指向包层脚本（扩容后 PARTUUID 会被换掉 → 重启黑屏）
-原因：补丁只在 $ROOT_MNT/etc/systemd/system 找 resize-rootfs.service，
-      而飞牛基镜像把它放在 /usr/lib/systemd/system，于是 sed 没执行、自证失败。
-现在：两处都找；找到后改指包层脚本并统一落到 /etc/systemd/system（/etc 覆盖 /usr/lib）；
-      自证改查落地后的单元，仍然缺就 fail。自证本身保留（它成功拦住了带缺陷的产物）。
+实机日志证据（TF 卡收集，boot_id 26662ac9）：
+  end0: PHY [stmmac-0:00] driver [Generic PHY]     ← PHY 未被识别（ID 读不到）
+  end0: Failed to reset the dma                    ← RGMII 时钟不来，DMA 软复位不完成
+根因：我们只在 MAC 节点写了【旧式】snps,reset-gpio；6.18 内核对 PHY 复位走的是
+      【新式】PHY 节点里的 reset-gpios → PHY 未被正确释放复位 → MDIO 读不到 PHY ID
+      （退化成 Generic PHY）→ RGMII 时钟不来 → MAC 的 DMA 软复位永不完成（同一根因两个症状）。
+另外：PHY 节点上残留 T68M 基座带来的 realtek,led*-triggers（本板 PHY 是 Maxio MAE0621A）。
+
+本轮改动：
++ tools/dts-pipeline/fix-phy-reset.py（新步骤 8.6）
+    · 两个网口的 PHY 节点加 reset-gpios（fe2a0000=gpio2 line27 / fe010000=gpio3 line7）
+      + reset-assert-us=20000 / reset-deassert-us=100000
+    · 清掉 PHY 节点里的 realtek,* 属性
+    · 自证：两个网口都必须有 reset-gpios 且不含 realtek，否则失败
++ tools/dts-pipeline/fix-phy-reg.py（新步骤 8.5）：补 ethernet-phy@N 的 reg=<0x00>
+    （缺它 → "has invalid PHY address" → 内核取不到 PHY 地址 → 退化成 Generic PHY）
+    踩坑记录：① re.finditer 迭代同时改文本会致偏移失效；② 删 mdio 里的 reg 会连子节点
+    的 reg 一起删 —— 必须按层级，只删 mdio 自身那一层
++ 全节点比对结论：我们的 ethernet×2 / vop / hdmi / pcie×2 / sata / phy / rga / gpu /
+    usb×2 / hdmi-sound 与【同一个 6.18 内核自带的主线 EVB DTB】逐属性一致（0 差异），
+    含 gmac 的 stmmac-axi-config / rx-queues-config / tx-queues-config / mdio 子节点
+
+先前已入库且在本日志中确认生效：
+  ✓ invalid PHY address 消失、Generic PHY 相关引脚冲突消失（Error applying setting=0）
+  ✓ PCIe failed to map apb registers 消失（reg-names=dbi,apb,config）
+  ✓ PHY lock failed 消失（pcie3 phy 按实机补齐 pipe-grf/clocks）
+  ✓ mpp failed to attach service 消失（rockchip,srv/iommus 已解析）
+  ✓ SATA 可用（ahci-dwc 1/1 ports implemented）
