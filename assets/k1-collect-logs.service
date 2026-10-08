@@ -1,0 +1,12 @@
+[Unit]
+Description=KICKPI K1 开机日志收集（写入 /boot/k1logs，供离线精读）
+RequiresMountsFor=/boot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/sbin/k1-collect-boot-logs.sh boot
+TimeoutStartSec=5min
+Nice=10
+IOSchedulingClass=idle

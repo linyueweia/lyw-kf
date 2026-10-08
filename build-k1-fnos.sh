@@ -300,6 +300,60 @@ WRAP
         echo "  ℹ 基镜像无 /usr/trim/bin/resize-rootfs.sh，跳过扩容补丁"
     fi
 
+    # ── 4b) OS 层修复（逐条来自 TF 卡实测日志，固化进构建，保证一键复现）──────────
+    # 这些对应实机日志里真实出现过的失败项，避免每次都靠事后手改卡。
+    ASSETS="$(dirname "$(readlink -f "$0")")/assets"
+    OSFIX="$ROOT_MNT"
+
+    # (1) 开机日志收集器：每次开机在 /boot/k1logs 落两份快照（45s / 180s），供离线精读
+    install -Dm755 "$ASSETS/k1-collect-boot-logs.sh" "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh"
+    install -Dm644 "$ASSETS/k1-collect-logs.service" "$OSFIX/etc/systemd/system/k1-collect-logs.service"
+    install -Dm644 "$ASSETS/k1-collect-logs.timer"   "$OSFIX/etc/systemd/system/k1-collect-logs.timer"
+    mkdir -p "$OSFIX/etc/systemd/system/timers.target.wants"
+    ln -sf ../k1-collect-logs.timer "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer"
+
+    # (2) modules-load 清单里去掉本内核没有的模块
+    #     msr = x86 专用；md_mod = 本内核无此模块 → 都会让 systemd-modules-load.service 失败
+    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod"; do
+        f="${pair%%:*}"; m="${pair##*:}"
+        p="$OSFIX/etc/modules-load.d/$f"
+        if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
+            cp -f "$p" "$p.orig-fnnas"
+            sed -i "/^${m}$/d" "$p"
+            echo "  ✓ 移除 $f 里本内核不存在的模块 $m"
+        fi
+    done
+
+    # (3) 本板无对应硬件的服务一律 mask（与日志里那几条 FAILED 一一对应）
+    #     pwm-fancontrol = 本板风扇是 GPIO 控制；nut-* = 无 UPS；smartmontools = 无磁盘；exim4 = 未配置
+    for u in pwm-fancontrol nut-monitor nut-server smartmontools exim4; do
+        for d in "$OSFIX/etc/systemd/system" "$OSFIX/usr/lib/systemd/system"; do
+            if [[ -f "$d/$u.service" && ! -L "$d/$u.service" ]]; then
+                ln -sf /dev/null "$OSFIX/etc/systemd/system/$u.service"
+                echo "  ✓ mask $u.service"
+                break
+            fi
+        done
+    done
+
+    # (4) 内核日志级别开到最详细：下次从收集到的 dmesg 里能直接看到驱动自述行
+    if [[ -n "${BOOT_PART:-}" ]]; then
+        mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
+        if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/extlinux/extlinux.conf" ]]; then
+            if ! grep -q ignore_loglevel "$BOOT_MNT/extlinux/extlinux.conf"; then
+                sed -i 's#\(append .*\)#\1 loglevel=7 ignore_loglevel#' "$BOOT_MNT/extlinux/extlinux.conf"
+                echo "  ✓ 已加 loglevel=7 ignore_loglevel"
+            fi
+            sync
+            umount_safe "$BOOT_MNT"
+        fi
+    fi
+
+    # 自证：缺任何一项都算构建失败
+    [[ -x "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh" ]] || fail "日志收集脚本未就位"
+    [[ -e "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer" ]] || fail "日志收集定时器未启用"
+    echo "  ✓ OS 层修复已固化（日志收集 / 模块清单 / 服务 mask / 内核日志级别）"
+
 # OTA 引导同步脚本（若基镜像自带则保留）
 # umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（明明该做的都做完了）。
 # 先 sync 落盘，再重试，最后惰性卸载兜底。

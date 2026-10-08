@@ -1,0 +1,13 @@
+[Unit]
+Description=KICKPI K1 开机日志收集定时器（开机 45s 与 180s 各抓一次快照）
+
+[Timer]
+# 45s：引导早期错误已全部落盘；180s：把延迟探测（hdmi-sound/rga/gpu 等）与服务启动失败也抓全
+OnBootSec=45s
+OnBootSec=180s
+AccuracySec=1s
+Persistent=false
+Unit=k1-collect-logs.service
+
+[Install]
+WantedBy=timers.target

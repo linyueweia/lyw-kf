@@ -1,0 +1,40 @@
+飞牛适配收口：DTS 全量按实机对齐（网口 PHY 复位+Maxio 驱动 / HDMI / 系统灯 / SATA / PCIe）；
+并把 TF 卡实测出的 OS 层修复全部固化进构建
+
+一、DTS/DTB（最终版，dist/rk3568-kickpi-k1.dtb = 149,988 字节，md5 920074fe357a4b3c）
+   生成方式完全可复现：tools/dts-pipeline/（11 步，末步 dtc 0 ERROR/FATAL 才产出）
+     1 gen-k1-dts-from-t68m.py   基座：本板身份/gmac 四延迟/SDIO/关无此设备/网口 PHY 复位
+     2 merge-live-nodes.py       并入实机板级节点（数字 phandle → 绝对路径引用）
+     3 inject-extra-nodes.py     补建稳压器 pcie3/minipcie/gpio-regulator/dc-12v
+     4 inject-leds.py            注入 leds 整棵（11 个子节点）
+     5 apply-mainline-soc.py     用【同内核版本主线 DTB】覆盖 SoC（vop/hdmi/gmac/rga/gpu/pcie）
+     6 align-status-from-live.py 按实机对齐 status（打开被误关设备：SATA/USB3/编解码/NPU/I2C/I2S/PWM）
+     7 import-missing-nodes.py   导入实机有而我们没有的节点
+     8 merge-vendor-final.py     收尾合并（rga/npu/编解码/PCIe-PHY/USB/音频）
+     9 fix-phy-reg.py            补 ethernet-phy@N 的 reg
+    10 disable-conflict-nodes.py 禁用抢网口引脚设备
+    11 dtc 判定
+
+   逐条对应的实测日志证据：
+   · end0/end1 cannot attach to PHY / invalid PHY address
+       → 两个 gmac 补 snps,reset-gpio(gpio2 line27 / gpio3 line7)+active-low+delays；
+         两个 ethernet-phy@0 补 reg=<0x00>（缺它→读不到 PHY ID 0x7b744411→退化成 Generic PHY）
+   · Error applying setting, reverse things back（引脚被抢）
+       → 禁用 spi@fe640000 / serial@fe670000,fe6b0000,fe680000（它们带 T68M 引脚组，抢走 RGMII 引脚）
+   · failed to get vop2 register byname → vop reg-names 改 "vop","gamma-lut"（HDMI）
+   · failed to map apb registers（PCIe/M.2）→ pcie 节点按主线补 reg-names="dbi","apb","config"
+   · 系统灯不亮 → 注入实机 leds 整棵
+   · sata@fc000000 disabled（实机 okay）→ 按实机打开（SATA 立刻可用，ahci-dwc 已实测）
+   · mpp-* failed to attach service/iommu、RKNPU -110、GPU OPP
+       → 收尾合并补 rockchip,srv / iommus / operating-points-v2
+
+二、OS 层修复固化进 build-k1-fnos.sh（新增 4b 段，逐条来自 TF 卡实测日志）
+   · 装开机日志收集器（assets/：脚本+service+timer，开机 45s/180s 各抓一次到 /boot/k1logs）
+   · modules-load 清单移除本内核不存在的 msr（x86）与 md_mod → 修 systemd-modules-load 失败
+   · mask pwm-fancontrol（本板 GPIO 风扇）/nut-monitor/nut-server（无 UPS）/smartmontools（无盘）/exim4
+   · extlinux 追加 loglevel=7 ignore_loglevel（下次 dmesg 带完整驱动自述，便于精确定位）
+   · 以上均带自证，缺一项即构建失败
+
+三、此前已入库
+   · resize-rootfs 扩容后写回 PARTUUID（消除"首启正常、重启黑屏"）
+   · 保留基镜像自带引导件（不注入自建 u-boot）
