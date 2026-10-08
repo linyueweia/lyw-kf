@@ -203,11 +203,20 @@ if [[ -n "$MODULES_DIR" && -d "$MODULES_DIR" ]]; then
     done < <(find "$MODULES_DIR" -name '*.ko' | sort)
     echo "  ✓ 注入模块 $n 个"
 
-    if [[ -n "$(ls -A "$MODULES_DIR"/firmware 2>/dev/null || true)" ]]; then
-        mkdir -p "$ROOT_MNT/lib/firmware"
-        cp -rf "$MODULES_DIR"/firmware/. "$ROOT_MNT/lib/firmware/"
-        echo "  ✓ 注入固件 $(find "$MODULES_DIR"/firmware -type f | wc -l) 个"
+    # 固件一律从【仓库自带】modules/firmware 取（15 个，实机同款）——
+    # 旧逻辑只认 $MODULES_DIR/firmware，而 CI 用 built-modules 目录（没有 firmware）
+    # → 15 个 SWT6621S_* 一个都没进镜像且完全无提示（取证 A3：6 次 CI 均如此）。
+    REPO_FW="$(dirname "$(readlink -f "$0")")/modules/firmware"
+    FW_SRC=""
+    if compgen -G "$REPO_FW/SWT6621S_*" >/dev/null; then FW_SRC="$REPO_FW"
+    elif compgen -G "$MODULES_DIR/firmware/SWT6621S_*" >/dev/null; then FW_SRC="$MODULES_DIR/firmware"
     fi
+    [[ -n "$FW_SRC" ]] || fail "找不到 SWT6621S 固件（$REPO_FW 与 $MODULES_DIR/firmware 均无）"
+    mkdir -p "$ROOT_MNT/lib/firmware"
+    cp -rf "$FW_SRC"/. "$ROOT_MNT/lib/firmware/"
+    FW_N=$(find "$ROOT_MNT/lib/firmware" -maxdepth 1 -name 'SWT6621S_*' | wc -l)
+    [[ "$FW_N" -eq 15 ]] || fail "镜像内 SWT6621S 固件 $FW_N 个 ≠ 15（实机/仓库均为 15）"
+    echo "  ✓ 注入固件 15 个（$FW_SRC）"
 
     # 开机自动加载（网络依赖 PHY 驱动先就位）
     mkdir -p "$ROOT_MNT/etc/modules-load.d"
@@ -215,6 +224,18 @@ if [[ -n "$MODULES_DIR" && -d "$MODULES_DIR" ]]; then
 # KICKPI K1 板级模块：Maxio PHY 必须先于 dwmac 就位，否则网口会绑到通用 PHY
 maxio
 EOF
+    # 真正的「PHY 先于 MAC」保障：dwmac_rk 是模块，由 udev 按
+    # of:N*T*Crockchip,rk3568-gmac 别名在 ~10s 冷插拔加载（不在任何 modules-load 清单里），
+    # 只有 modprobe.d 的 softdep 能保证 modprobe dwmac_rk 时先拉起 maxio。
+    # 否则 netdev 首次 up 时 phy_attach_direct() 先绑 Generic PHY，晚到的 maxio 被
+    # __device_attach 跳过 → 必须 ifdown/ifup 才可能换绑（取证 A1 的 driver-core 依据）。
+    mkdir -p "$ROOT_MNT/etc/modprobe.d"
+    cat > "$ROOT_MNT/etc/modprobe.d/kickpi-k1.conf" <<'SOFTEOF'
+# KICKPI K1: Maxio MAE0621A PHY 驱动必须先于 stmmac/dwmac 注册
+softdep dwmac_rk pre: maxio
+softdep stmmac pre: maxio
+SOFTEOF
+    echo "  ✓ modprobe.d softdep（maxio 先于 dwmac_rk/stmmac）"
     # 不依赖 depmod 的保险：用一个 systemd oneshot 按【绝对路径】insmod。
     # 理由：depmod 需要在 chroot 里跑 arm64 二进制（要 qemu/binfmt）；
     #       万一环境不具备，这套按路径加载仍然有效。
@@ -231,7 +252,14 @@ EOF
       echo "RemainAfterExit=yes"
       # 注意 \$m 必须转义：这是给【内层 /bin/sh】用的变量，若被本脚本展开，
       # 在 set -u 下会直接报 "m: unbound variable" 并中断构建（实测踩到）。
-      echo "ExecStart=/bin/sh -c 'for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do /sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/\$m.ko 2>/dev/null || true; done'"
+      # ExecStart 在【构建期】就展开成逐个 insmod 的字面命令：内层 sh 不再有 $ 变量，
+      # 既不会被本脚本 set -u 判 "m: unbound variable"，也不会被 systemd 变量展开吃掉路径。
+      CMD=""
+      for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do
+        [[ -n "$CMD" ]] && CMD="$CMD; "
+        CMD="$CMD/sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/$m.ko || echo 'insmod failed: $m (vermagic/path?)'"
+      done
+      echo "ExecStart=/bin/sh -c '$CMD'"
       echo ""
       echo "[Install]"
       echo "WantedBy=sysinit.target"
@@ -240,14 +268,18 @@ EOF
     ln -sf ../kickpi-k1-modules.service "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules.service"
     echo "  ✓ 已装 systemd 绝对路径加载单元（不依赖 depmod）"
 
-    # 能的话再刷新模块依赖（arm64 chroot 需要 qemu/binfmt）
-    if [[ -x "$ROOT_MNT/usr/bin/depmod" ]] && command -v qemu-aarch64-static >/dev/null 2>&1; then
-        cp -f "$(command -v qemu-aarch64-static)" "$ROOT_MNT/usr/bin/" 2>/dev/null || true
-        chroot "$ROOT_MNT" depmod -a "$KREL" 2>/dev/null \
-            && echo "  ✓ depmod 已刷新（qemu）" \
-            || echo "  ⚠ depmod 未成功，已由上面的绝对路径单元兜底"
+    # 刷新模块依赖。旧条件 `[[ -x $ROOT_MNT/usr/bin/depmod ]]` 恒假 —— 基镜像里只有
+    # /sbin/depmod → /bin/kmod，于是【depmod 从未运行】，modules.dep 不含 updates/kickpi-k1/*，
+    # modprobe/modinfo/systemd-modules-load 对 maxio 全部无效（实机：
+    # `modinfo: ERROR: Module maxio not found.`）。宿主 depmod -b 不执行目标架构二进制，
+    # 跨架构可用，是这里的正解。
+    if command -v depmod >/dev/null 2>&1; then
+        depmod -b "$ROOT_MNT" "$KREL" >/dev/null 2>&1 || fail "depmod -b $KREL 失败"
+        grep -q "updates/kickpi-k1/maxio.ko" "$ROOT_MNT/usr/lib/modules/$KREL/modules.dep" \
+            || fail "modules.dep 未含 updates/kickpi-k1/maxio.ko → modprobe/modules-load 全废"
+        echo "  ✓ depmod -b 完成，modules.dep 已含 updates/kickpi-k1/maxio.ko"
     else
-        echo "  ℹ 无 qemu-aarch64-static，跳过 depmod（由绝对路径单元兜底）"
+        fail "宿主缺少 depmod（kmod 包），无法刷新镜像 modules.dep"
     fi
 fi
 
@@ -295,9 +327,26 @@ WRAP
         if [[ -n "$UNIT_SRC" ]]; then
             cp -f "$UNIT_SRC" "$UNIT_SRC.orig-fnnas" 2>/dev/null || true
             # 改指包层脚本后统一落到 /etc/systemd/system（/etc 覆盖 /usr/lib）
-            sed 's#^ExecStart=/usr/trim/bin/resize-rootfs\.sh\(.*\)$#ExecStart=/usr/trim/bin/resize-rootfs-kickpi-k1.sh\1#' \
-                "$UNIT_SRC" > "$UNIT_DST"
-            echo "  ✓ resize-rootfs 单元（$UNIT_SRC）已改指包层脚本"
+            # ⚠ 旧写法 `sed … "$UNIT_SRC" > "$UNIT_DST"` 在 UNIT_SRC==UNIT_DST（单元就在
+            #   /etc/systemd/system）时会先截断目标文件，sed 读到 0 字节 → 单元被写空 →
+            #   下面的自证 grep 必失败 —— 这正是 run 37726365951/37732802163/37734267965
+            #   三次 CI 失败的根因（取证实测 `sed f > f` size=0）。
+            #   先写临时文件、校验改指成功、再原子替换。
+            UNIT_TMP="$(mktemp)"
+            # ⚠ 基镜像的这个单元【整份文件每行都带 2 个前导空格】（实测 cat -A：
+            #   "  ExecStart=/usr/trim/bin/resize-rootfs.sh$"），旧的 `^ExecStart=` 锚点
+            #   永远匹配不上 —— 这正是 run 37726365951/37732802163/37734267965 三次 CI 红的原因。
+            #   改成允许前导空白并保留原缩进。
+            sed -E 's#^([[:space:]]*)ExecStart=/usr/trim/bin/resize-rootfs\.sh(.*)$#\1ExecStart=/usr/trim/bin/resize-rootfs-kickpi-k1.sh\2#' \
+                "$UNIT_SRC" > "$UNIT_TMP"
+            if ! grep -q 'resize-rootfs-kickpi-k1.sh' "$UNIT_TMP"; then
+                echo "    原单元 ExecStart 行（源文件，未改动）："
+                grep -n 'ExecStart' "$UNIT_SRC" | cat -A | sed 's/^/      /' 
+                rm -f "$UNIT_TMP"
+                fail "resize-rootfs.service 的 ExecStart 形状与 sed 模式不匹配（未改指）"
+            fi
+            cp -f "$UNIT_TMP" "$UNIT_DST"; rm -f "$UNIT_TMP"
+            echo "  ✓ resize-rootfs 单元（$UNIT_SRC → $UNIT_DST）已改指包层脚本"
         fi
         # 自证：包层脚本就位、单元（任一位置）已改指
         [[ -x "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh" ]] || fail "扩容包层脚本未就位"
@@ -322,7 +371,10 @@ WRAP
 
     # (2) modules-load 清单里去掉本内核没有的模块
     #     msr = x86 专用；md_mod = 本内核无此模块 → 都会让 systemd-modules-load.service 失败
-    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod"; do
+    #     rga3 = 实机上 systemd-modules-load 每次开机 'Bad address'（该内核 rga3 初始化
+    #     在本板环境返回 EFAULT），把整机 --failed 顶红；rga3 有 OF 匹配表，仍会由 udev
+    #     冷插拔按 compatible 别名加载，特性不受影响。
+    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod" "trim-rk_vcodec.conf:rga3"; do
         f="${pair%%:*}"; m="${pair##*:}"
         p="$OSFIX/etc/modules-load.d/$f"
         if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
@@ -344,6 +396,15 @@ WRAP
         done
     done
 
+    # (3b) ifupdown 是残留：本镜像由 NetworkManager + fnOS 自己的 network_service 管网，
+    #      /etc/network/interfaces 根本不存在 → networking.service 每次开机报
+    #      'ifup: couldn't open interfaces file'，把网口真正的报错埋掉。
+    #      无条件 mask —— 旧写法用 `-f` 只查 /etc 下两个路径，而这个单元实际在 /usr/lib 下、
+    #      /etc 下的 wants 又是断链（-f 恒假）→ 分支从不触发，自证随即判红。
+    rm -f "$OSFIX/etc/systemd/system/multi-user.target.wants/networking.service" || true
+    ln -sf /dev/null "$OSFIX/etc/systemd/system/networking.service"
+    echo "  ✓ mask networking.service（ifupdown 残留；NM 才是本网的管理者）"
+
     # (4) 内核日志级别开到最详细：下次从收集到的 dmesg 里能直接看到驱动自述行
     if [[ -n "${BOOT_PART:-}" ]]; then
         mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
@@ -357,9 +418,30 @@ WRAP
         fi
     fi
 
-    # 自证：缺任何一项都算构建失败
+    # 自证：缺任何一项都算构建失败（只看“文件存在”不算 —— mask 必须是指向 /dev/null 的软链）
     [[ -x "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh" ]] || fail "日志收集脚本未就位"
     [[ -e "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer" ]] || fail "日志收集定时器未启用"
+    # mask 自证：单元【存在于镜像里】才要求已 mask（exim4 等在本基镜像中根本不存在，
+    # 一刀切断言会把好构建判死；“存在却没 mask” 才是真问题）
+    for u in pwm-fancontrol nut-monitor nut-server smartmontools exim4 networking; do
+        if [[ -e "$OSFIX/etc/systemd/system/$u.service" || -e "$OSFIX/usr/lib/systemd/system/$u.service" ]]; then
+            if ! { [[ -L "$OSFIX/etc/systemd/system/$u.service" ]] \
+                    && [[ "$(readlink "$OSFIX/etc/systemd/system/$u.service")" == "/dev/null" ]]; }; then
+                fail "$u.service 存在于镜像但未真正 masked（自证要求 /etc 下指向 /dev/null 的软链）"
+            fi
+        fi
+    done
+    [[ ! -e "$OSFIX/etc/systemd/system/multi-user.target.wants/networking.service" ]] \
+        || fail "networking.service 仍在 multi-user.target.wants（开机仍会报 ifup 空配置）"
+    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod" "trim-rk_vcodec.conf:rga3"; do
+        f="${pair%%:*}"; m="${pair##*:}"
+        p="$OSFIX/etc/modules-load.d/$f"
+        if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
+            fail "$f 仍含本内核跑不了的模块 $m（会让 systemd-modules-load 开机失败）"
+        fi
+    done
+    grep -qs '^maxio$' "$OSFIX/etc/modules-load.d/kickpi-k1.conf" || fail "kickpi-k1.conf 缺 maxio"
+    [[ -f "$OSFIX/etc/modprobe.d/kickpi-k1.conf" ]] || fail "缺 modprobe.d softdep（maxio 先于 dwmac_rk）"
     echo "  ✓ OS 层修复已固化（日志收集 / 模块清单 / 服务 mask / 内核日志级别）"
 
 # OTA 引导同步脚本（若基镜像自带则保留）
@@ -384,10 +466,26 @@ losetup -d "$LOOP2"
 
 echo
 echo "==== 6) 压缩与摘要 ===="
-xz -T0 -9 -c "$IMG" > "$IMG.xz"
-( cd "$OUT_DIR" && sha256sum "$(basename "$IMG").xz" > SHA256SUMS )
-echo "  ✓ $IMG.xz ($(stat -c%s "$IMG.xz") 字节)"
+    # 可跳过压缩：本地快速验证（SKIP_XZ=1）或内存吃紧时用
+    if [[ "${SKIP_XZ:-0}" == "1" ]]; then
+        echo "  ℹ SKIP_XZ=1，跳过 xz（验证直接用 .img）"
+    else
+        # 默认 -T0 -6：-9 在小内存机器上会被 OOM killer 干掉（实测 xz 被 Killed），
+        # 而 -6 对 3.84G 镜像体积差别很小、耗时更短。
+        xz -T0 -"${XZ_LEVEL:-6}" -c "$IMG" > "$IMG.xz"
+    fi
+if [[ "${SKIP_XZ:-0}" == "1" ]]; then
+    ( cd "$OUT_DIR" && sha256sum "$(basename "$IMG")" > SHA256SUMS )
+    echo "  ✓ $IMG ($(stat -c%s "$IMG") 字节，未压缩)"
+else
+    ( cd "$OUT_DIR" && sha256sum "$(basename "$IMG").xz" > SHA256SUMS )
+    echo "  ✓ $IMG.xz ($(stat -c%s "$IMG.xz") 字节)"
+fi
 cat "$OUT_DIR/SHA256SUMS" | sed 's/^/     /'
 echo
 echo "🎉 完成。刷写（由用户对 SD 卡执行，例如 /dev/sdX 或 /dev/mmcblk1）："
+if [[ "${SKIP_XZ:-0}" == "1" ]]; then
+echo "   dd if=$(basename "$IMG") of=/dev/sdX bs=4M conv=fsync status=progress"
+else
 echo "   xz -dc $(basename "$IMG").xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress"
+fi

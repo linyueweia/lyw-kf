@@ -1051,7 +1051,7 @@
 		compatible = "rockchip,rk3568-gmac\0snps,dwmac-4.20a";
 		snps,mixed-burst;
 		snps,tso;
-		assigned-clock-parents = <0x0f 0x187>;
+		assigned-clock-parents = <0x0f 0x187 0x0f 0xc5>;
 		assigned-clock-rates = <0x00 0x7735940>;
 		clock_in_out = "output";
 		phy-mode = "rgmii";
@@ -1085,14 +1085,10 @@
 			phandle = <0x10a>;
 
 			ethernet-phy@0 {
-				reset-gpios = <&{/pinctrl/gpio@fe760000} 0x07 0x01>;
-
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
 				phandle = <0x57>;
-			
-				reset-assert-us = <20000>;
-				reset-deassert-us = <100000>;};
+			};
 		};
 
 		stmmac-axi-config {
@@ -1107,11 +1103,7 @@
 			phandle = <0x4f>;
 
 			queue0 {
-				reset-gpios = <&{/pinctrl/gpio@fe760000} 0x07 0x01>;
-
-			
-				reset-assert-us = <20000>;
-				reset-deassert-us = <100000>;};
+			};
 		};
 
 		tx-queues-config {
@@ -5082,7 +5074,7 @@
 		compatible = "rockchip,rk3568-gmac\0snps,dwmac-4.20a";
 		snps,mixed-burst;
 		snps,tso;
-		assigned-clock-parents = <0x0f 0x183>;
+		assigned-clock-parents = <0x0f 0x183 0x0f 0xb6>;
 		assigned-clock-rates = <0x00 0x7735940>;
 		clock_in_out = "output";
 		phy-mode = "rgmii";
@@ -5116,14 +5108,10 @@
 			phandle = <0x27f>;
 
 			ethernet-phy@0 {
-				reset-gpios = <&{/pinctrl/gpio@fe750000} 0x1b 0x01>;
-
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
 				phandle = <0xd4>;
-			
-				reset-assert-us = <20000>;
-				reset-deassert-us = <100000>;};
+			};
 		};
 
 		stmmac-axi-config {
@@ -5138,11 +5126,7 @@
 			phandle = <0xcd>;
 
 			queue0 {
-				reset-gpios = <&{/pinctrl/gpio@fe750000} 0x1b 0x01>;
-
-			
-				reset-assert-us = <20000>;
-				reset-deassert-us = <100000>;};
+			};
 		};
 
 		tx-queues-config {

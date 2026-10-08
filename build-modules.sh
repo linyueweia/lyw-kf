@@ -197,15 +197,31 @@ if [[ -n "$WIFI_SRC" ]]; then
     else
         cp -a "$WIFI_SRC" "$WD"
     fi
-    PATCH="$(dirname "$0")/patches/wifi-6.18-port.patch"
-    if [[ -f "$PATCH" ]]; then
-        ( cd "$WD" && git apply "$PATCH" ) && echo "  ✓ 已应用 6.18 移植补丁" || echo "  ⚠ 补丁未能应用（可能源码版本不同）"
+    # 必须转成绝对路径：下面 git apply 是在 ( cd "$WD" && … ) 里跑的，
+    # 相对路径会被解析到 wifi 源码目录下 → 补丁打不开（6 次 CI 都在这里静默失败，
+    # 旧写法只 echo ⚠ 继续出图，SWT6621S 三模块从没产出过）。
+    PATCH="$(cd "$(dirname "$0")" && pwd)/patches/wifi-6.18-port.patch"
+    if [[ ! -f "$PATCH" ]]; then
+        echo "✗ 缺少 patches/wifi-6.18-port.patch（SWT6621S 三模块无法产出）"; exit 1
     fi
-    make "${MAKEFLAGS_COMMON[@]}" M="$WD" \
+    if ( cd "$WD" && git apply "$PATCH" ); then
+        echo "  ✓ 已应用 6.18 移植补丁"
+    else
+        echo "✗ wifi-6.18-port.patch 应用失败（源码版本不同）→ SWT6621S 三模块不会产出"; exit 1
+    fi
+    MKLOG="$WORK/wifi-make.log"
+    if make "${MAKEFLAGS_COMMON[@]}" M="$WD" \
         CONFIG_SEEKWAVE_BSP_DRIVERS=m CONFIG_SKW_NO_CONFIG=y CONFIG_SKW_SDIOHAL=m \
-        CONFIG_WLAN_VENDOR_SWT6621S=m CONFIG_SKW_BT=m modules >/dev/null 2>&1 || true
+        CONFIG_WLAN_VENDOR_SWT6621S=m CONFIG_SKW_BT=m \
+        modules >"$MKLOG" 2>&1; then
+        :
+    else
+        echo "✗ SWT6621S make 失败（$MKLOG 尾 40 行）:"; tail -40 "$MKLOG"; exit 1
+    fi
     for ko in $(find "$WD" -name '*.ko'); do cp -f "$ko" "$OUT/"; done
-    echo "  SWT6621S 产出: $(ls "$OUT" | grep -cE 'skw|swt') 个"
+    SWTN=$(ls "$OUT" | grep -cE 'skw|swt' || true)
+    echo "  SWT6621S 产出: $SWTN 个"
+    [[ "$SWTN" -ge 3 ]] || { echo "✗ SWT6621S 产出 $SWTN 个 < 3（swt6621s_wifi/skw_sdio_lite/skwbt）"; exit 1; }
 else
     echo "  （未提供 SWT6621S 源码，跳过）"
 fi
