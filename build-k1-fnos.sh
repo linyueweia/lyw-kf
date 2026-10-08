@@ -285,15 +285,23 @@ fi
 exit $rc
 WRAP
         chmod +x "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh"
-        if [[ -f "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" ]]; then
-            cp -f "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" \
-                  "$ROOT_MNT/etc/systemd/system/resize-rootfs.service.orig" 2>/dev/null || true
-            sed -i 's#^ExecStart=/usr/trim/bin/resize-rootfs\.sh$#ExecStart=/usr/trim/bin/resize-rootfs-kickpi-k1.sh#' \
-                "$ROOT_MNT/etc/systemd/system/resize-rootfs.service"
+        # 单元可能在 /etc/systemd/system 也可能在 /usr/lib/systemd/system —— 两处都要覆盖
+        UNIT_SRC=""
+        for cand in "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" \
+                    "$ROOT_MNT/usr/lib/systemd/system/resize-rootfs.service"; do
+            if [[ -f "$cand" && ! -L "$cand" ]]; then UNIT_SRC="$cand"; break; fi
+        done
+        UNIT_DST="$ROOT_MNT/etc/systemd/system/resize-rootfs.service"
+        if [[ -n "$UNIT_SRC" ]]; then
+            cp -f "$UNIT_SRC" "$UNIT_SRC.orig-fnnas" 2>/dev/null || true
+            # 改指包层脚本后统一落到 /etc/systemd/system（/etc 覆盖 /usr/lib）
+            sed 's#^ExecStart=/usr/trim/bin/resize-rootfs\.sh\(.*\)$#ExecStart=/usr/trim/bin/resize-rootfs-kickpi-k1.sh\1#' \
+                "$UNIT_SRC" > "$UNIT_DST"
+            echo "  ✓ resize-rootfs 单元（$UNIT_SRC）已改指包层脚本"
         fi
-        # 自证：包层脚本就位、单元已改指
+        # 自证：包层脚本就位、单元（任一位置）已改指
         [[ -x "$ROOT_MNT/usr/trim/bin/resize-rootfs-kickpi-k1.sh" ]] || fail "扩容包层脚本未就位"
-        grep -q 'resize-rootfs-kickpi-k1.sh' "$ROOT_MNT/etc/systemd/system/resize-rootfs.service" \
+        grep -q 'resize-rootfs-kickpi-k1.sh' "$UNIT_DST" \
             || fail "resize-rootfs.service 未指向包层脚本（扩容后 PARTUUID 会被换掉 → 重启黑屏）"
         echo "  ✓ 已修补 resize-rootfs（扩容后写回 PARTUUID，消除重启 'Waiting for root device'）"
     else
