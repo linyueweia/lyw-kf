@@ -199,24 +199,39 @@ fdtfile=rockchip/$DTB_NAME
 EOF
 fi
 
+# ── 引导：完全按飞牛官方做法走 boot.scr 链路（不生成 extlinux.conf）────────────
+# 官方基镜像 BOOT 分区里只有 boot.cmd / boot.scr / fnEnv.txt / grub，没有 extlinux/。
+# 官方 boot.cmd 每次启动【现场】取分区身份，从不写死：
+#     part uuid ${devtype} ${devnum}:${distro_bootpart} bootuuid
+#     part uuid ${devtype} ${devnum}:${distro_rootpart} rootuuid
+#     setenv bootargs "root=PARTUUID=${rootuuid} … ubootpart=PARTUUID=${bootuuid} …"
+# 内核用 kernelfile=vmlinuz（软链）跟随最新内核 → 在线更新天然兼容；
+# 要回退旧内核时改 fnEnv.txt 的 kernelfile=/vmlinuz-<旧内核> 即可（官方键）。
+# 之前仓库自造的 extlinux.conf 是静态 root=PARTUUID=（构建期读到的值，继承自官方
+# 基镜像、所有产物都一样），u-boot 又优先走 extlinux → TF 卡与 eMMC 双介质并存会串盘。
+K1_EXTRAARGS="cma=256M loglevel=7 ignore_loglevel"
+if grep -q '^extraargs=' "$BOOT_MNT/fnEnv.txt"; then
+    grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
+    { cat /tmp/_fnenv.keep; echo "extraargs=$K1_EXTRAARGS"; } > "$BOOT_MNT/fnEnv.txt"
+else
+    echo "extraargs=$K1_EXTRAARGS" >> "$BOOT_MNT/fnEnv.txt"
+fi
+# 历史构建残留/回退用的 extlinux.conf：改名即不参与引导（u-boot 只认该文件名）
+if [[ -f "$BOOT_MNT/extlinux/extlinux.conf" ]]; then
+    mv -f "$BOOT_MNT/extlinux/extlinux.conf" "$BOOT_MNT/extlinux/extlinux.conf.k1-off"
+    echo "  ✓ 已停用 extlinux.conf →（.k1-off），引导交回官方 boot.scr"
+fi
+# 留一份静态配置当回退材料（u-boot 不识别这个名字，不参与引导）
 mkdir -p "$BOOT_MNT/extlinux"
-cat > "$BOOT_MNT/extlinux/extlinux.conf" <<EOF
+cat > "$BOOT_MNT/extlinux/extlinux.conf.k1-static" <<EOF
 label fnOS (KICKPI K1)
     kernel /vmlinuz
     fdt /dtb/rockchip/$DTB_NAME
     append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
-
-# 备用条目：显式指向本次构建/验证过的内核文件（不跟随 /vmlinuz 软链）。
-# 在线更新把 /vmlinuz 指到新内核后若出问题，可在 u-boot 菜单选这一项回退；
-# 默认条目仍是 /vmlinuz（跟随最新内核），在线更新照常用。
-label fnOS (KICKPI K1) - pinned-$KREL
-    kernel /vmlinuz-$KREL
-    fdt /dtb/rockchip/$DTB_NAME
-    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
 EOF
 
-echo "  ── 写入后的 extlinux.conf ──"
-sed 's/^/     /' "$BOOT_MNT/extlinux/extlinux.conf"
+echo "  ── 引导配置（官方 fnEnv.txt，boot.scr 现场取 PARTUUID）──"
+sed 's/^/     /' "$BOOT_MNT/fnEnv.txt"
 sync
 umount_safe "$BOOT_MNT"
 
@@ -490,13 +505,14 @@ WRAP
     ln -sf /dev/null "$OSFIX/etc/systemd/system/networking.service"
     echo "  ✓ mask networking.service（ifupdown 残留；NM 才是本网的管理者）"
 
-    # (4) 内核日志级别开到最详细：下次从收集到的 dmesg 里能直接看到驱动自述行
+    # (4) 内核日志级别开到最详细：写进官方 fnEnv.txt 的 extraargs（boot.scr 会拼进 bootargs）
     if [[ -n "${BOOT_PART:-}" ]]; then
         mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
-        if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/extlinux/extlinux.conf" ]]; then
-            if ! grep -q ignore_loglevel "$BOOT_MNT/extlinux/extlinux.conf"; then
-                sed -i 's#\(append .*\)#\1 loglevel=7 ignore_loglevel#' "$BOOT_MNT/extlinux/extlinux.conf"
-                echo "  ✓ 已加 loglevel=7 ignore_loglevel"
+        if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
+            if ! grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt"; then
+                grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
+                { cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
+                echo "  ✓ fnEnv extraargs 已含 loglevel=7 ignore_loglevel"
             fi
             sync
             umount_safe "$BOOT_MNT"
@@ -555,7 +571,7 @@ WRAP
     #   · 源码进 /usr/src/kickpi-k1/，本机 gcc/make 就能编（基镜像已带 build-essential）
     #   · /etc/kernel/postinst.d/zz-kickpi-k1-modules 每装一个新内核就自动重编并装好
     #   · 开机服务按 uname -r 定位 + 头文件未就绪时留标记、开机补编
-    #   · extlinux 默认条目仍是 /vmlinuz（跟随最新内核），另加一条显式内核的备用条目
+    #   · 引导走官方 boot.scr：kernelfile=vmlinuz 软链跟随最新内核（在线更新天然兼容）
     install -Dm755 "$ASSETS/kickpi-k1-build-modules.sh" "$OSFIX/usr/local/sbin/kickpi-k1-build-modules.sh"
     install -Dm755 "$ASSETS/kickpi-k1-load-modules"     "$OSFIX/usr/local/sbin/kickpi-k1-load-modules"
     install -Dm755 "$ASSETS/zz-kickpi-k1-modules"       "$OSFIX/etc/kernel/postinst.d/zz-kickpi-k1-modules"
@@ -617,10 +633,18 @@ mount "${LOOP2}p1" "$BOOT_MNT"
 V_DTB="$(sha256sum "$BOOT_MNT/dtb/rockchip/$DTB_NAME" | awk '{print $1}')"
 V_SRC="$(sha256sum "$DTB" | awk '{print $1}')"
 [[ "$V_DTB" == "$V_SRC" ]] && echo "  ✓ 镜像内 DTB sha256 与源一致（${V_SRC:0:16}…）" || fail "镜像内 DTB 与源不一致"
-grep -q "root=PARTUUID=$ROOT_PARTUUID" "$BOOT_MNT/extlinux/extlinux.conf" \
-    && echo "  ✓ 引导 root= 指向镜像自身 PARTUUID（不会误挂 eMMC）" || fail "root= 校验失败"
+# 引导链路必须是【官方 boot.scr】：boot.cmd 每次启动 part uuid 现场取身份，不写死
+grep -q 'part uuid' "$BOOT_MNT/boot.cmd" 2>/dev/null \
+    && echo "  ✓ boot.cmd 含 part uuid（现场取分区身份，不会写死 UUID）" \
+    || fail "boot.cmd 缺 part uuid（官方现场取身份机制没了 → 退回静态 UUID 会串盘）"
+[[ -f "$BOOT_MNT/boot.scr" ]] || fail "缺 boot.scr（官方引导链断了）"
 grep -q "fdtfile=rockchip/$DTB_NAME" "$BOOT_MNT/fnEnv.txt" \
     && echo "  ✓ fnEnv fdtfile 正确" || fail "fnEnv 校验失败"
+grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt" \
+    && echo "  ✓ fnEnv extraargs 含日志级别" || fail "fnEnv extraargs 缺 loglevel"
+# 不能留 extlinux.conf 抢引导（它会把 root= 钉在构建期 PARTUUID 上）
+[[ ! -f "$BOOT_MNT/extlinux/extlinux.conf" ]] \
+    || fail "仍存在 extlinux/extlinux.conf：u-boot 会优先走它，绕开官方 boot.scr 的现场取 UUID"
 umount_safe "$BOOT_MNT"
 losetup -d "$LOOP2"
 

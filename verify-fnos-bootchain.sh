@@ -112,15 +112,23 @@ for f in "$MNT_B/fnEnv.txt" "$MNT_B/extlinux/extlinux.conf" "$MNT_B/armbianEnv.t
     echo "     ⟨$(basename "$f")⟩"; grep -iE 'fdtfile|fdt |kernel|root=|console' "$f" | head -6 | sed 's/^/       /'
 done
 if [[ -n "$ROOT_PARTUUID" ]]; then
-    for f in "$MNT_B/extlinux/extlinux.conf" "$MNT_B/armbianEnv.txt" "$MNT_B/fnEnv.txt"; do
+    for f in "$MNT_B/extlinux/extlinux.conf" "$MNT_B/armbianEnv.txt"; do
         [[ -f "$f" ]] || continue
         grep -q "$ROOT_PARTUUID" "$f" && ok "$(basename "$f") 的 root= 指向镜像自身 PARTUUID" || warn "$(basename "$f") 未见自身 PARTUUID"
     done
 fi
-if [[ -f "$MNT_B/extlinux/extlinux.conf" ]]; then
+# 官方链路断言：boot.cmd 每次启动【现场】part uuid 取分区身份，不写死
+if grep -q 'part uuid' "$MNT_B/boot.cmd" 2>/dev/null && [[ -f "$MNT_B/boot.scr" ]]; then
+    ok "引导走官方 boot.scr（part uuid 现场取身份，UUID 不写死、双介质不串盘）"
+    if [[ -f "$MNT_B/extlinux/extlinux.conf" ]]; then
+        warn "同时存在 extlinux.conf：u-boot 会优先走它 → 绕开现场取 UUID（建议改名停用）"
+    fi
+elif [[ -f "$MNT_B/extlinux/extlinux.conf" ]]; then
     grep -q 'root=PARTUUID=' "$MNT_B/extlinux/extlinux.conf" \
-        && ok "extlinux 有 root=PARTUUID=" \
+        && ok "extlinux 有 root=PARTUUID=（静态链路可用）" \
         || bad "extlinux 缺 root=PARTUUID=（活链路缺失 → 开机 Waiting for root device 黑屏）"
+else
+    bad "既无 boot.cmd 的 part uuid、又无 extlinux root= → 开机必卡 Waiting for root device"
 fi
 grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/fnEnv.txt" 2>/dev/null && ok "fnEnv 指向本板 DTB" \
     || { grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/extlinux/extlinux.conf" 2>/dev/null && ok "extlinux 指向本板 DTB" || bad "引导配置未指向本板 DTB"; }

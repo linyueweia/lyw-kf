@@ -37,7 +37,8 @@ modules/firmware/               SWT6621S 固件 15 个（取自实机原厂系�
 patches/wifi-6.18-port.patch    驱动移植补丁（12 文件 +64/-41，可干净应用到原始源码）
 
 uboot/rk3568/kickpi-k1/         引导配置 + DDR 决策记录（含实测证据）
-build-k1-fnos.sh                镜像装配（root= 自动取镜像自身 PARTUUID，绝不写设备）
+build-k1-fnos.sh                镜像装配（走官方 boot.scr：part uuid 现场取分区身份，不写死 UUID）
+tools/fit-resign.py             FIT 哈希校验/重签（改写 FIT 内负载后必跑，否则 SPL 拒载）
 verify-fnos-bootchain.sh        引导链六环验证
 fetch-uboot-from-kk.sh          从 kk(iNextOS) 构建产物取本板 u-boot 对（含 DDR 防呆）
 ```
@@ -77,6 +78,20 @@ K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 r
    - BROM 冷启动若优先 eMMC → 压根不从 SD 起（厂商 env 显示 `rkimg_bootdev` 先探 SD）
 3. `idbloader.img` **内嵌板级 DDR 初始化固件**，跨板复用会 DDR 训练不匹配（实测 T68M 那份是
    `DDR V1.18`，与本板 LPDDR4@1560MHz 不符）—— 只能用为 K1 编译的那一对。
+
+## 引导链走官方 boot.scr（2026-10-12 改：UUID 不写死）
+
+- 官方基镜像 BOOT 分区里只有 `boot.cmd` / `boot.scr` / `fnEnv.txt` / `grub`，**没有 extlinux**；
+  `boot.cmd` 每次启动 `part uuid` 现场取 bootuuid/rootuuid 再拼进 bootargs
+  → 分区身份永不写死，TF 卡与 eMMC 双介质并存也不会串盘；`kernelfile=vmlinuz` 软链跟随最新内核。
+- 本仓库原先自造 `extlinux/extlinux.conf`（静态 `root=PARTUUID=` 构建期读到的值），而 u-boot 优先走
+  extlinux → 身份被钉死；更麻烦的是该值继承自官方基镜像，**所有产物完全相同**（实测 TF 卡与
+  KICKPI-K1_34.img 都是 `e1b4e4d7-a003-4448-ade5-273ed910c9ad`）。
+- 现改为：不生成 `extlinux.conf`，K1 参数（cma / loglevel）写进官方 `fnEnv.txt` 的 `extraargs`；
+  构建期硬断言：`boot.cmd` 必须含 `part uuid`、且 `extlinux/extlinux.conf` 必须不存在。
+- 回退旧内核：改 `fnEnv.txt` 的 `kernelfile=/vmlinuz-<旧内核>`（官方键，boot.cmd 认）；
+  硬回退材料留在 `extlinux/extlinux.conf.k1-static`（改回 `extlinux.conf` 即切静态链路）。
+- ⚠ 该链路**尚未在 K1 实机跑通验证**（此前实测用的是 extlinux），刷完必须串口确认。
 
 ## 用法
 
