@@ -128,26 +128,11 @@ jobs:
           echo "  分区表:"
           sudo parted -s base/fnnas-base.img unit s print || true
 
-      - name: Report boot material (u-boot pair / DTB / modules)
+      - name: Report boot material (DTB / modules，构建前清单)
         run: |
-          echo "── u-boot（基镜像自带，2026-10-08 实测结论）──"
-          # 防呆断言对象 = 产物里真正被使用的引导件（LBA64 idbloader）：
-          # 必须是 v1.23 家族（与本板 eMMC 原厂同哈希），拒绝已知坏值。
-          dd if=out/KICKPI-K1_*.img bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_idb.img
-          strings /tmp/_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -2 || true
-          if strings /tmp/_idb.img | grep -q 'V1.18 f366f69a7d'; then
-            echo "::error::产物 idbloader 是 T68M 的 DDR V1.18，与本板 1560MHz 不匹配"
-            exit 1
-          fi
-          if strings /tmp/_idb.img | grep -q '1056MHz'; then
-            echo "::error::产物 idbloader 属 1056MHz 家族 —— 不是本板 DDR"
-            exit 1
-          fi
-          strings /tmp/_idb.img | grep -q 'v1.23' || {
-            echo "::error::产物 idbloader 非 v1.23（应与本板 eMMC 原厂同哈希）"
-            exit 1
-          }
-          echo "  ✓ 产物引导件 = 基镜像自带 v1.23（本板验证可用）"
+          # 本步骤在 Assemble 之前执行：只列材料，不做产物断言。
+          # （产物 DDR 断言在 Show outputs —— 此时 out/ 尚不存在。）
+          echo "── u-boot：无仓库材料（恒用飞牛基镜像自带，2026-10-08 实测结论）──"
           echo "── DTB ──"; ls -la dist/
           echo "── 模块 ──"; find modules -name '*.ko' -exec ls -la {} \;
 
@@ -247,6 +232,28 @@ jobs:
         run: |
           ls -la out/
           cat out/SHA256SUMS || true
+          # ── 产物 u-boot 防呆断言（Assemble 之后，对象 = 真正交付的引导件）──
+          # 必须 v1.23（与本板 eMMC 原厂同哈希）；拒绝 T68M V1.18 与 1056MHz 家族。
+          F=$(ls out/KICKPI-K1_*.img 2>/dev/null | head -1)
+          if [[ -z "$F" ]]; then
+            echo "::error::out/ 下没有 .img 产物（现有: $(ls out/ | tr '\n' ' ')）"
+            exit 1
+          fi
+          dd if="$F" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_idb.img
+          strings /tmp/_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver' | head -2 || true
+          if strings /tmp/_idb.img | grep -q 'V1.18 f366f69a7d'; then
+            echo "::error::产物 idbloader 是 T68M 的 DDR V1.18，与本板 1560MHz 不匹配"
+            exit 1
+          fi
+          if strings /tmp/_idb.img | grep -q '1056MHz'; then
+            echo "::error::产物 idbloader 属 1056MHz 家族 —— 不是本板 DDR"
+            exit 1
+          fi
+          strings /tmp/_idb.img | grep -q 'v1.23' || {
+            echo "::error::产物 idbloader 非 v1.23（应与本板 eMMC 原厂同哈希）"
+            exit 1
+          }
+          echo "  ✓ 产物引导件 = 基镜像自带 v1.23（本板验证可用）"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
