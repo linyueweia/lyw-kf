@@ -73,9 +73,15 @@ else
     tail -15 "$WORK/maxio.log" | tee -a "$LOG"
 fi
 
-# ── SWT6621S WiFi/BT（三模块，同一棵树）────────────────────────────────
+# ── WiFi/BT：优先用官方自带的 seekwave（2026-10-12 实测确认）─────────────────
+# 官方内核包自带 updates/trim/seekwave-swt6621s/{swt6621s_wifi,skwbt,skw_sdio_lite,skw_usb_lite}.ko，
+# 随内核一起更新。所以先探测：官方有就绝不自己编（在新内核上自编还容易失败、且与官方重复）。
+OFFICIAL_WIFI="/usr/lib/modules/$REL/updates/trim/seekwave-swt6621s"
 WD="$WORK/wifi"
-if [[ -d "$SRCDIR/swt6621s" ]]; then
+if compgen -G "$OFFICIAL_WIFI/*.ko" >/dev/null 2>&1; then
+    say "✓ 官方已带 seekwave WiFi/BT（$OFFICIAL_WIFI），跳过自编"
+    WIFI_SRC="官方包"
+elif [[ -d "$SRCDIR/swt6621s" ]]; then
     cp -a "$SRCDIR/swt6621s" "$WD"
     if "${MK[@]}" M="$WD" \
         CONFIG_SEEKWAVE_BSP_DRIVERS=m CONFIG_SKW_NO_CONFIG=y CONFIG_SKW_SDIOHAL=m \
@@ -90,23 +96,35 @@ if [[ -d "$SRCDIR/swt6621s" ]]; then
                 say "✗ $b vermagic 不符 $REL，未安装"
             fi
         done
-        say "✓ SWT6621S 装入 $got 个模块"
+        say "✓ 自编 SWT6621S 装入 $got 个模块"
+        WIFI_SRC="自编 $got 个"
     else
-        say "✗ SWT6621S 编译失败（日志尾部）："
-        tail -20 "$WORK/wifi.log" | tee -a "$LOG"
+        # 真正的编译错误在 make 的 Error N 之前，单独抽 error: 行，别只看到 make 的收尾
+        say "✗ SWT6621S 编译失败，真实错误行："
+        grep -aE "error:|Error:|No such file|undefined reference" "$WORK/wifi.log" 2>/dev/null \
+            | tail -12 | tee -a "$LOG"
+        say "  （官方无 seekwave 且自编失败 → 该内核无 WiFi/BT，网口不受影响）"
+        WIFI_SRC="失败"
     fi
 else
-    say "⚠ 缺少 $SRCDIR/swt6621s（WiFi/BT 源未注入），只处理 maxio"
+    say "⚠ 官方无 seekwave、且 $SRCDIR/swt6621s 源未注入 → 该内核无 WiFi/BT"
+    WIFI_SRC="缺失"
 fi
 
 # ── 收尾：刷新模块依赖 + 结果断言 ───────────────────────────────────────
 if command -v depmod >/dev/null 2>&1; then
-    depmod -a "$REL" >>"$LOG" 2>&1 || say "⚠ depmod -a $REL 失败"
+    # depmod 可能对官方目录结构报 fstatat/alternatives 之类告警，只要 modules.dep
+    # 里写进了 maxio 就算成功（下面用 grep 实断言，不依赖 depmod 退出码）
+    depmod -a "$REL" >>"$LOG" 2>&1 || say "⚠ depmod -a $REL 有告警（继续，下面实断言）"
 fi
-ok=0
-for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do
-    [[ -f "$DEST/$m.ko" ]] && ok=$((ok+1))
-done
-say "==== 完成：$REL 下板级模块 $ok/4 个 ===="
-[[ $ok -ge 1 ]] || exit 1
-exit 0
+grep -q "updates/kickpi-k1/maxio.ko" "/usr/lib/modules/$REL/modules.dep" 2>/dev/null \
+    && say "✓ modules.dep 已登记 updates/kickpi-k1/maxio.ko" \
+    || say "✗ modules.dep 未登记 maxio（modprobe 会找不到 → 网口挂）"
+
+# 硬断言：maxio 必须就位 —— 没有它，这个内核的两个网口必然全灭
+if [[ -f "$DEST/maxio.ko" ]] && strings "$DEST/maxio.ko" | grep -q "vermagic=.*$REL"; then
+    say "==== 完成：$REL 网口驱动 maxio ✓；WiFi/BT 来源=${WIFI_SRC} ===="
+    exit 0
+fi
+say "==== 失败：$REL 下没有可用的 maxio.ko（网口必然起不来）===="
+exit 1

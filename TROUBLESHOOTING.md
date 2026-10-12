@@ -8,7 +8,7 @@
 | # | 现象 | 根因 | 修复 | 验收判据 |
 |---|------|------|------|----------|
 | 1 | 刷 eMMC 后上电停在 SPL，没有任何启动迹象 | 就地改写 FIT 内 u-boot 负载的 `boot_targets` 却没重算 sha256 | `tools/fit-resign.py` 重签 + 构建期硬门禁 + 验证环 | `python tools/fit-resign.py <img>` 输出 `总计 8 个 image 节点，0 个异常` |
-| 2 | 在线更新后双网口彻底起不来 | 更新装了新内核，板级 .ko 只在旧内核目录、开机单元写死 release | 模块跟着内核走（postinst 钩子 + 开机自愈，不钉内核） | 新内核目录下存在 `updates/kickpi-k1/maxio.ko` 且 `dmesg` 出现 `MAE0621A` / `phy_id=0x7b744411` / `Link is Up` |
+| 2 | 在线更新后双网口彻底起不来 | 更新装了新内核，板级 .ko 只在旧内核目录、开机单元写死 release | 模块跟着内核走（postinst 钩子 + 开机自愈，不钉内核） | **✅ 已实测验证 2026-10-12 18:52**：更新装 c1145 → 钩子自动编出 maxio → `MAE0621A READY` ×2、`Link is Up`（见 §2.1） |
 | 3 | TF 卡与 eMMC 同镜像并存可能串盘 | 仓库自造 `extlinux.conf` 静态写死 `root=PARTUUID=`，值继承自基镜像、所有产物相同 | 改回飞牛官方 boot.scr 链路（`part uuid` 现场取） | `boot.cmd` 含 `part uuid`、镜像内**不存在** `extlinux/extlinux.conf` |
 | 4 | Windows 看不见移动硬盘里的资料 | 硬盘是 ext4，Windows 无 ext4 驱动（硬件没坏） | 用仓库 `tools/offline-read/` 直读（管理员权限，免装驱动） | 能列出根目录并拷出文件 |
 
@@ -136,9 +136,71 @@ TF 卡系统功能全部正常，点飞牛「在线更新」之后，双千兆�
 ### 验收判据
 
 ```bash
-ls /usr/lib/modules/$(uname -r)/updates/kickpi-k1/     # 应有 maxio.ko 等 4 个
-dmesg | grep -E "MAE0621A|phy_id=0x7b744411|Link is Up"
+# maxio 必须在当前内核目录；WiFi/BT 由官方 updates/trim/seekwave-swt6621s 提供
+ls /usr/lib/modules/$(uname -r)/updates/kickpi-k1/
+ls /usr/lib/modules/$(uname -r)/updates/trim/seekwave-swt6621s/
+sudo dmesg | grep -E "MAE0621A|phy_id=0x7b744411|Link is Up"
 grep -E "maxio|kickpi" /var/log/kickpi-k1-modules.log
+```
+
+### 2.1 实测验证：2026-10-12 18:45 在线更新 → 18:52 自愈成功 ✅
+
+整机跑的是 CI 按 `1b26769`+`4b9d1c5` 构建的镜像，做了一次**真实的飞牛在线更新**，
+结果：**内核换了、网口最终自己回来了**。设备端日志（SSH 直取，可复跑）：
+
+| 时间 | 事件 | 证据 |
+|------|------|------|
+| 18:45:49 | `upgrade linux-image-arm64 6.18.18.c951-trim → 6.18.18.c1145-trim` | `/var/log/dpkg.log` |
+| 18:39–18:45 | 官方 `/etc/kernel/postinst.d/15-update-ukernel-ver` 把 `fnEnv.txt` 的 `kernelfile=` 写成新内核文件 | `ls -l /boot/fnEnv.txt` |
+| 18:52:09 | 我们的 `zz-kickpi-k1-modules` 触发：`目标内核 6.18.18.c1145-trim` | `/var/log/kickpi-k1-modules.log` |
+| 18:52:24 | `✓ maxio.ko 已装入 /usr/lib/modules/6.18.18.c1145-trim/updates/kickpi-k1` | 同上 |
+| 18:52:47 | `modules.dep` 登记 maxio（`grep -c maxio` = 1） | `/usr/lib/modules/<rel>/modules.dep` |
+| ~18:53 | 网口灯亮、拿到 `192.168.10.129` | 用户观察 + `ip -br a` |
+
+**dmesg（sudo）**：
+
+```
+[61.906789] MAE0621A READY
+[62.034695] rk_gmac-dwmac fe2a0000.ethernet end0: PHY [stmmac-0:00] driver [MAE0621A-Q2C Gigabit Ethernet]
+[62.162517] MAE0621A READY
+[62.290690] rk_gmac-dwmac fe010000.ethernet end1: PHY [stmmac-1:00] driver [MAE0621A-Q2C Gigabit Ethernet]
+[66.442565] rk_gmac-dwmac fe010000.ethernet end1: Link is Up - 1Gbps/Full
+```
+
+> `end0` 是 `NO-CARRIER / carrier=0`，**没插网线**，不是故障；
+> `MDIO device at address 1 is missing` 是占位节点的预期输出（见 README 网口章节，无害）。
+
+**机制闭环（这次实测确认的完整链条）**：
+
+```
+官方 15-update-ukernel-ver（字母序 15）
+   └─ 把 fnEnv.txt 的 kernelfile= 指向刚装的新内核
+我们的 zz-kickpi-k1-modules（字母序 zz，必然在 15 之后）
+   └─ 对该内核本机编出 maxio.ko + 登记 modules.dep
+开机 → 进新内核 → maxio 已就位 → 绑上 MAE0621A → 网口恢复
+```
+`zz` 前缀是**有意**的：必须排在官方内核钩子之后，官方改名也不会被超到前面去。
+
+**新事实：WiFi 不用我们编**。官方内核包自带
+`updates/trim/seekwave-swt6621s/{swt6621s_wifi,skwbt,skw_sdio_lite,skw_usb_lite}.ko`，
+随内核一起更新；我们这次自编 SWT6621S 在新内核上编译失败，但**不影响任何功能**
+（官方那份已在，`lsmod` 里 `swt6621s_wifi`/`skwbt` 正常加载）。
+
+**据此改进 `assets/kickpi-k1-build-modules.sh`（本次提交）**：
+1. 先探测官方 seekwave，有就跳过自编（不再在新内核上做无谓且易失败的编译）；
+2. 编译失败时抽取真正的 `error:` 行（此前只看到 make 的 `Error 1` 收尾，真错误被 warning 淹没）；
+3. 结果断言改为「**maxio 必须就位**」（网口硬依赖），WiFi 只要官方/自编有其一即可；
+4. `depmod` 对官方目录结构的 `fstatat/alternatives` 告警不再否决流程，改用
+   `modules.dep` 实际含 `updates/kickpi-k1/maxio.ko` 判定。
+
+**复验命令（换内核后照跑）**：
+
+```bash
+uname -r                                                    # 应是新内核
+ls /usr/lib/modules/$(uname -r)/updates/kickpi-k1/          # 应有 maxio.ko
+ls /usr/lib/modules/$(uname -r)/updates/trim/seekwave-swt6621s/   # 官方 WiFi 四件套
+sudo dmesg | grep -E "MAE0621A|Link is Up"
+tail -20 /var/log/kickpi-k1-modules.log                     # 应看到本次触发记录
 ```
 
 ---

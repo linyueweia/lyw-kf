@@ -96,9 +96,17 @@ K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 r
   KICKPI-K1_34.img 都是 `e1b4e4d7-a003-4448-ade5-273ed910c9ad`）。
 - 现改为：不生成 `extlinux.conf`，K1 参数（cma / loglevel）写进官方 `fnEnv.txt` 的 `extraargs`；
   构建期硬断言：`boot.cmd` 必须含 `part uuid`、且 `extlinux/extlinux.conf` 必须不存在。
-- 回退旧内核：改 `fnEnv.txt` 的 `kernelfile=/vmlinuz-<旧内核>`（官方键，boot.cmd 认）；
+- 回退旧内核：改 `fnEnv.txt` 的 `kernelfile=/vmlinuz-<旧内核>`（官方键，boot.cmd 认）。
+  ⚠ 官方 `/etc/kernel/postinst.d/15-update-ukernel-ver` 每装一个新内核都会把它改回新内核，
+  手工回退只在下次内核更新前有效（2026-10-12 实测：更新后 `kernelfile` 被写成
+  `vmlinuz-6.18.18.c1145-trim`）。我们的 `zz-kickpi-k1-modules` 正是利用这一点：
+  官方先把引导指向新内核（`15-`），我们再对同一内核编好 maxio（`zz-`），顺序不可颠倒。
   硬回退材料留在 `extlinux/extlinux.conf.k1-static`（改回 `extlinux.conf` 即切静态链路）。
-- ⚠ 该链路**尚未在 K1 实机跑通验证**（此前实测用的是 extlinux），刷完必须串口确认。
+- ✅ **已实测跑通**（2026-10-12，CI `4b9d1c5` 镜像整机启动 + 在线更新）：
+  实机 `cmdline` 里 `ubootpart=PARTUUID=425c93b1-5f56-4d3e-90a2-7cbaa3353337`
+  正是 `part uuid` 现场取的 boot 分区身份（与基镜像 BOOT PartGUID `b1935c42-…` 字节序互逆），
+  `root=PARTUUID` + `extraargs` 均按预期拼进；`/boot/extlinux/` 下只剩不被 u-boot 识别的
+  `extlinux.conf.k1-static`，确认引导确实走官方 boot.scr。
 
 ## 用法
 
