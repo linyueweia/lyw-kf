@@ -4944,7 +4944,10 @@
 		sdio-pwrseq {
 
 			wifi-enable-h {
-				rockchip,pins = <0x03 0x1d 0x00 0x129>;
+				/* 0x129 在本树指向 i2s@fe430000（展开式快照的 phandle 二次错乱），
+				   是坏的 config 引用；0xc1 = pcfg-pull-none-drv-level-2（真 pcfg）。
+				   同时也是 R5 实测通过的组合：pin=PD5(0x1d) + config=0xc1 */
+				rockchip,pins = <0x03 0x1d 0x00 0xc1>;
 				phandle = <0x320>;
 			};
 		};
@@ -7075,7 +7078,16 @@
 	clock-names = "ext_clock";
 	clocks = <&{/i2c@fdd40000/pmic@20} 0x01>;
 	compatible = "mmc-pwrseq-simple";
-	post-power-on-delay-ms = <0xc8>;
+	post-power-on-delay-ms = <0x3e8>;
+	/* 2026-10-12 实机修复 WiFi 的关键（R1~R5 五轮实验定论）：
+	   飞牛内核没有原厂的 wlan-platdata 驱动去拉 WIFI,poweren_gpio(gpio3_PD5)，
+	   SDIO 卡没人上电 → mmc2 扫卡永远失败。用内核标准的 pwrseq 机制代劳：
+	   · 脚必须是 PD5（原厂 poweren 即此脚；试过 PD4 全失败）
+	   · flag 必须 GPIO_ACTIVE_LOW(0x01)：pwrseq 时序 assert→delay→deassert，
+	   扫卡发生在 deassert 后，ACTIVE_LOW 下 deassert=物理高电平=使能；
+	   flag=0 时扫卡瞬间输出的是低电平(关断态) —— 这正是 R2/R3/R4 失败的原因
+	   · 延时给足 1000ms（200ms 也试过，1000ms 实测通过） */
+	reset-gpios = <&{/pinctrl/gpio@fe760000} 0x1d 0x01>;
 	};
 	syscon@fdcb0000 {
 	clocks = <&{/clock-controller@fdd20000} 0x192>;

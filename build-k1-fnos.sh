@@ -277,7 +277,16 @@ if [[ -n "$MODULES_DIR" && -d "$MODULES_DIR" ]]; then
     cp -rf "$FW_SRC"/. "$ROOT_MNT/lib/firmware/"
     FW_N=$(find "$ROOT_MNT/lib/firmware" -maxdepth 1 -name 'SWT6621S_*' | wc -l)
     [[ "$FW_N" -eq 15 ]] || fail "镜像内 SWT6621S 固件 $FW_N 个 ≠ 15（实机/仓库均为 15）"
-    echo "  ✓ 注入固件 15 个（$FW_SRC）"
+    # ★2026-10-12 实机修复：seekwave 驱动请求的路径带子目录前缀，
+    #   如 seekwave/SWT6621S_SEEKWAVE_R00001.bin、seekwave/swt6621s_wifi.dat。
+    #   只装根目录 → 驱动 -2 找不到 → skw_calib_download 失败 → wifi service 中止 →
+    #   没有 wlan0（实机复现：卡识别成功、boot 成功、卡在 calib 固件）。
+    #   /lib/firmware/seekwave/ 原有 8 月手放的旧文件且缺 3 个关键 .bin，同样会踩坑。
+    mkdir -p "$ROOT_MNT/lib/firmware/seekwave"
+    cp -rf "$FW_SRC"/. "$ROOT_MNT/lib/firmware/seekwave/"
+    FW_S=$(find "$ROOT_MNT/lib/firmware/seekwave" -maxdepth 1 -name 'SWT6621S_*' | wc -l)
+    [[ "$FW_S" -eq 15 ]] || fail "seekwave/ 子目录固件 $FW_S 个 ≠ 15（驱动实际请求该路径）"
+    echo "  ✓ 注入固件 15 个（$FW_SRC）→ /lib/firmware/ 与 /lib/firmware/seekwave/ 双路径"
 
     # 开机自动加载（网络依赖 PHY 驱动先就位）
     mkdir -p "$ROOT_MNT/etc/modules-load.d"
