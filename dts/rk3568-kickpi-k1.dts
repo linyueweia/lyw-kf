@@ -476,6 +476,7 @@
 			assigned-clocks = <0x0f 0x48>;
 			assigned-clock-parents = <0x0f 0x196>;
 			#clock-cells = <0x01>;
+			clock-output-names = "rk808-clkout1", "rk808-clkout2";
 			clock-names = "mclk";
 			clocks = <0x0f 0x48>;
 			pinctrl-names = "default";
@@ -556,6 +557,9 @@
 
 				DCDC_REG4 {
 					regulator-name = "vdd_npu";
+					regulator-boot-on;
+					regulator-always-on;
+					regulator-init-microvolt = <0xdbba0>;
 					regulator-initial-mode = <0x02>;
 					regulator-min-microvolt = <0x7a120>;
 					regulator-max-microvolt = <0x149970>;
@@ -1487,7 +1491,10 @@
 		status = "okay";
 		legacy-interrupt-controller {
 			interrupt-controller;
+			#address-cells = <0x00>;
+			#interrupt-cells = <0x01>;
 			interrupt-parent = <0x01>;
+			interrupts = <0x00 0x48 0x01>;
 			phandle = <0x64>;
 		};
 	};
@@ -5095,7 +5102,6 @@
 
 	phy@fe8c0000 {
 		compatible = "rockchip,rk3568-pcie3-phy";
-		data-lanes = <0x01 0x02>;
 		phandle = <0xc8>;
 	
 		status = "okay";
@@ -5166,12 +5172,12 @@
 		interrupt-names = "sys", "pmc", "msg", "legacy", "err";
 		#interrupt-cells = <0x01>;
 		interrupt-map-mask = <0x00 0x00 0x00 0x07>;
-		interrupt-map = <0x00 0x00 0x00 0x01 0xd1 0x00 0x00 0x00 0x00 0x02 0xd1 0x01 0x00 0x00 0x00 0x03 0xd1 0x02 0x00 0x00 0x00 0x04 0xd1 0x03>;
+		interrupt-map = <0x00 0x00 0x00 0x01 &{/pcie@fe280000/legacy-interrupt-controller} 0x00 0x00 0x00 0x00 0x02 &{/pcie@fe280000/legacy-interrupt-controller} 0x01 0x00 0x00 0x00 0x03 &{/pcie@fe280000/legacy-interrupt-controller} 0x02 0x00 0x00 0x00 0x04 &{/pcie@fe280000/legacy-interrupt-controller} 0x03>;
 		linux,pci-domain = <0x02>;
 		num-ib-windows = <0x06>;
 		num-ob-windows = <0x02>;
 		max-link-speed = <0x03>;
-		msi-map = <0x2000 0x6c 0x2000 0x1000>;
+		msi-map = <0x2000 &{/interrupt-controller@fd400000/msi-controller@fd440000} 0x2000 0x1000>;
 		num-lanes = <0x02>;
 		phys = <&{/phy@fe8c0000}>;
 		phy-names = "pcie-phy";
@@ -5184,7 +5190,10 @@
 		status = "okay";
 		legacy-interrupt-controller {
 			interrupt-controller;
+			#address-cells = <0x00>;
+			#interrupt-cells = <0x01>;
 			interrupt-parent = <0x01>;
+			interrupts = <0x00 0xa2 0x01>;
 			phandle = <0xca>;
 		};
 	};
@@ -5468,7 +5477,7 @@
 		gpios = <0x23 0x1c 0x00>;
 		pinctrl-names = "default";
 		pinctrl-0 = <0xe2>;
-		regulator-name = "vcc3v3_pcie";
+		regulator-name = "vcc3v3_pcie_slot";
 		regulator-min-microvolt = <0x325aa0>;
 		regulator-max-microvolt = <0x325aa0>;
 		vin-supply = <0xde>;
@@ -6139,6 +6148,9 @@
 
 	pcie3-regulator {
 		compatible = "regulator-fixed";
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
 		regulator-max-microvolt = <0x325aa0>;
 		gpio = <&{/pinctrl/gpio@fdd60000} 0x1c 0x00>;
 		regulator-min-microvolt = <0x325aa0>;
@@ -6146,6 +6158,9 @@
 	};
 	minipcie-regulator {
 		compatible = "regulator-fixed";
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
 		regulator-max-microvolt = <0x325aa0>;
 		gpio = <&{/pinctrl/gpio@fe760000} 0x13 0x00>;
 		regulator-min-microvolt = <0x325aa0>;
@@ -6153,6 +6168,7 @@
 	};
 	gpio-regulator {
 		compatible = "regulator-fixed";
+		enable-active-high;
 		regulator-max-microvolt = <0x325aa0>;
 		gpio = <&{/pinctrl/gpio@fdd60000} 0x1c 0x00>;
 		regulator-min-microvolt = <0x325aa0>;

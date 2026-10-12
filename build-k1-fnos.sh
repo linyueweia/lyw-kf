@@ -106,6 +106,26 @@ else
 fi
 
 echo
+echo "==== 2b) 修正 U-Boot 内置默认 env 的 boot_targets（USB 优先 → mmc 优先）===="
+# 背景：基镜像自带的 armbian U-Boot（2026.04-TRIM-c218，内嵌 fdtfile=rk3568-nanopi-r5s.dtb）
+# 把 usb 排在 boot_targets 第一位：
+#     bootcmd=bootflow scan -lb
+#     boot_targets=usb mmc1 mmc0 nvme scsi pxe dhcp spi
+# bootflow scan 扫到第一个有效 bootflow 就立刻启动，于是"开机前插着 USB 硬盘"时会先去
+# 枚举 USB，在轮到 SD(mmc1) 之前卡住/被抢走 → 表现即"机器起不来"。
+# 对照本板 eMMC 的厂商 U-Boot 是 mmc1 mmc0 ... usb0（usb 在最后），可见 "USB 优先"
+# 是 armbian 补丁引入的、不是本板固有。
+# 修法：就地把 boot_targets 的值改成 mmc 优先。两串等长（各 36 字节），
+#       不改变 env 总长、NUL 终止位不动、无需重算 CRC。
+# 脚本自带硬断言：全盘必须恰好 1 处命中旧串，写完读回复核（旧串 0 处 / 新串 1 处 / 大小不变）。
+if python3 "$(dirname "$0")/tools/patch-uboot-boot-targets.py" "$IMG"; then
+    echo "  ✓ boot_targets 已为 mmc 优先"
+else
+    echo "  ⚠ patch-uboot-boot-targets 未成功（可能已改过，或写入的是自有 u-boot）"
+    echo "     若使用自有 u-boot，请确认其内置 env 的 boot_targets 也是 mmc1 在前"
+fi
+
+echo
 echo "==== 3) 挂载镜像分区，取自身 PARTUUID 并配置引导 ===="
 cleanup() {
     mountpoint -q "$BOOT_MNT" && umount_safe "$BOOT_MNT" || true
