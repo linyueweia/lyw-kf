@@ -11,6 +11,8 @@
 | 2 | 在线更新后双网口彻底起不来 | 更新装了新内核，板级 .ko 只在旧内核目录、开机单元写死 release | 模块跟着内核走（postinst 钩子 + 开机自愈，不钉内核） | **✅ 已实测验证 2026-10-12 18:52**：更新装 c1145 → 钩子自动编出 maxio → `MAE0621A READY` ×2、`Link is Up`（见 §2.1） |
 | 3 | TF 卡与 eMMC 同镜像并存可能串盘 | 仓库自造 `extlinux.conf` 静态写死 `root=PARTUUID=`，值继承自基镜像、所有产物相同 | 改回飞牛官方 boot.scr 链路（`part uuid` 现场取） | `boot.cmd` 含 `part uuid`、镜像内**不存在** `extlinux/extlinux.conf` |
 | 4 | Windows 看不见移动硬盘里的资料 | 硬盘是 ext4，Windows 无 ext4 驱动（硬件没坏） | 用仓库 `tools/offline-read/` 直读（管理员权限，免装驱动） | 能列出根目录并拷出文件 |
+| 5 | WiFi：`mmc_host mmc2` 不注册、扫卡失败、无 wlan0 | ①`sdio-pwrseq` 缺 `reset-gpios` ②飞牛无原厂 wlan-platdata 驱动（没人拉 `WIFI,poweren_gpio`）③pinctrl config `0x129` 指向 i2s（phandle 错乱）；另有固件未装进 `seekwave/` 子目录 | pwrseq `reset-gpios = gpio3 PD5 + ACTIVE_LOW` 代劳上电 + delay 1000ms + config 换 `0xc1` + 固件双路径注入 | **✅ 实测**：`mmc2: new UHS-I SDR104 SDIO card` → `boot sucessfull` → wlan0 → nmcli 扫 7 个 AP（信号100/405M） |
+| 6 | NPU（灵魂配置）：`probe failed -22`、无 NPU 设备 | 三层：①飞牛 pm_domain 冷启动 pwrup idle 握手失败（ack 0x1ee）挡 `iommu@fde4b000` probe ②NPU 无 iommu group → `rknpu_probe` 源码 1331 行 `iommu_group_get==NULL → -EINVAL` ③DRM 模式无 `/dev/rknpu` + 推理需 root | `iommu@fde4b000 status=disabled` 走 rknpu **non-iommu 逃生门** + `interrupt-names=npu_irq`；推理用 root | **✅ 实测**：冷启动零干预 root 推理 → `init_runtime:0` → 输出 `(1,768)` → 中断 `0→25` → 域自动 pwrup on/active（见 §2.3） |
 
 ---
 
@@ -202,6 +204,108 @@ ls /usr/lib/modules/$(uname -r)/updates/trim/seekwave-swt6621s/   # 官方 WiFi 
 sudo dmesg | grep -E "MAE0621A|Link is Up"
 tail -20 /var/log/kickpi-k1-modules.log                     # 应看到本次触发记录
 ```
+
+---
+
+## 2.2 WiFi（SWT6621S）：SDIO 卡没人上电（2026-10-12 实测修复）
+
+### 现象与根因链（三层，全部实证）
+
+```
+[1] sdio-pwrseq 缺必需属性 → pwrseq probe 失败 → sdmmc2 defer 死循环
+    dmesg: dwmmc_rockchip fe000000.mmc 反复 probe + waiting_for_supplier ... supplier:platform:pinctrl
+    /sys/class/mmc_host 里 mmc2【从未出现】 → 没有 SDIO 总线 → 驱动 "wait scan card time out"
+[2] 即使总起来也扫不到卡：飞牛内核【没有】原厂的 wlan-platdata 驱动
+    （原厂靠它读 DT 的 WIFI,poweren_gpio = gpio3 PD5 给芯片上电）→ 卡无电 → CMD0 无应答
+[3] pinctrl 错乱：wifi-enable-h 的 config 第 4 项 0x129 在本树指向 i2s@fe430000
+    （展开式 DTB 快照的 phandle 二次错乱；0x129 只有 i2s 一个主人，不是 pcfg）
+另：seekwave 驱动请求的固件路径带子目录 seekwave/*.bin，构建只装到 /lib/firmware/ 根
+    → skw_calib_download -2 → wifi service 中止 → 有卡无 wlan0
+```
+
+### 修复（R1~R5 五轮实验的定论，机理写清）
+
+| # | 改动 | 关键机理 |
+|---|------|----------|
+| 1 | `sdio-pwrseq` 增 `reset-gpios = <&gpio3 0x1d 0x01>` | pwrseq 时序 `assert → delay → deassert`，**扫卡发生在 deassert 之后**：`GPIO_ACTIVE_LOW` 下 deassert=物理高电平=使能；`flag=0` 时扫卡瞬间输出的是关断电平 —— 这就是 R2/R3/R4 失败、R5 通过的全部原因（PD4/PD5 × 两极性 4 组合全试过） |
+| 2 | `post-power-on-delay-ms` 0xc8→0x3e8（1000ms） | 上电稳定时间，实测通过值 |
+| 3 | `wifi-enable-h` 的 config `0x129`→`0xc1` | 0xc1=`pcfg-pull-none-drv-level-2`（真 pcfg）；pin 保持 PD5(0x1d) |
+| 4 | 撤掉误加的 `vmmc/vqmmc/supports-sdio` | **原厂三镜像的 mmc 节点都没有这些**；SDIO 的 3.3V 由板上常供，画蛇添足反而引入变量 |
+| 5 | 构建脚本固件**双路径注入**（根 + `seekwave/`） | 驱动实际请求 `seekwave/SWT6621S_SEEKWAVE_R00001.bin` 等；设备上旧的 `seekwave/` 还缺 3 个关键 .bin |
+
+> 附带澄清两个曾浪费时间的假线索：`wifi_chip_type="rtl8822cs"` 是 BSP 模板残留
+>（官方 Debian 镜像里实装的是 `swt6621s_wifi.ko/skwbt.ko/skw_sdio_lite.ko`，芯片是 Seekwave）；
+> 原厂 `pwrseq` 也【没有】`reset-gpios`（他们有专有驱动代劳，我们必须用内核标准机制代劳）。
+
+### 验收（2026-10-12 实测）
+
+```text
+mmc2: new UHS-I speed SDR104 SDIO card at address 0001   ← 卡识别
+skw_start_wifi_service wifi boot sucessfull              ← 驱动 boot
+skw_calib_download: SWT6621S_SEEKWAVE_R00001.bin, size: 2372  ← 固件加载
+wlan0  66:32:09:5b:f0:a3                                  ← 接口出现
+nmcli device wifi list → 7 个 AP（TikTok-专用/OpenWrt_5G 信号 100、405 Mbit/s）
+蓝牙同步恢复：hci0, chip version 0x5302, boot bt sucessfully
+```
+
+---
+
+## 2.3 NPU（灵魂配置）：三层根因与 non-iommu 绕过（2026-10-12 实测修复）
+
+### 现象
+
+`RKNPU fde40000.npu: probe with driver RKNPU failed with error -22`、无 `/dev/rknpu`、fnOS 无 NPU。
+
+### 彻查清单结论（一个不漏，全部排除或定位）
+
+| 检查项 | 结论 |
+|--------|------|
+| 与官方 Debian/Ubuntu/Android DTB 逐项对照 | **npu/iommu/power-domain@6/clocks/supply/opp/pm_qos 全部一致**（pm_qos 同指 `qos@fe180000`；npu 三时钟同 `clock-controller@fdd20000` 0x23/0x28/0x29，600MHz）→ **DT 配置无差异，排除** |
+| 8 个 npu 相关 phandle 交叉反查 | scmi/power-controller/DCDC_REG4/iommus/opp-table/pm_qos… **全对，排除 phandle 错乱**（0x129 那类问题在 npu 段不存在） |
+| npu-opp-table | 7 档齐全（200M/850mV…900M/975mV），efuse/nvmem 链（`rockchip-otp0`、`npu-leakage@1c`、pvtm）完整 |
+| vdd_npu (DCDC_REG4) | 500mV–1.35V、enabled、users=1，**供电正常** |
+| 时钟 | `clk_npu=600MHz` 已设、`aclk_npu_pre` consumer=power-domain@6 |
+| 中断 | DT 无 `interrupt-names`（**官方也没有**）→ 飞牛驱动按名取 → 补 `npu_irq` 后 `GICv3 183` 注册、日志干净 |
+| **真正的 -22 出处（源码级）** | `drivers/rknpu/rknpu_drv.c` **1331 行**：`iommu_group_get(dev)==NULL → return -EINVAL`，紧跟 `rknpu iommu is enabled, using iommu mode` 打印，与 dmesg 时序严丝合缝 |
+
+### 完整因果链（每环实证）
+
+```
+① 飞牛 6.18 rockchip-pm-domain 冷启动给 npu 域 pwrup 时 idle 握手过不去
+   → "failed to get ack on domain 'npu', val=0x1ee"（54s/127s 稳定复现；
+     genpd 摘要 0x1ee 的 bit6=1 恰好= npu 域未上电，与 pipe/vo 两个 on 域互验）
+② iommu@fde4b000 的 power-domains=npu 域 → 该 IOMMU 控制器 probe 被挡
+   → /sys/class/iommu 里独缺 fde4b000（vpu/vdec/rga/vop 四个都在）
+③ npu 设备进不了任何 iommu group（group 只有 video-codec×2/rkvdec/vop）
+④ rknpu_probe 1331: iommu_group_get()==NULL → -EINVAL(-22) → 无 NPU
+⑤ 接口层：飞牛 rknpu 编译为 DRM_GEM 模式（无 /dev/rknpu misc 节点），
+   librknnrt 2.3.2 原生支持 /dev/dri/*；但 card1 是 root:video 660 → 推理必须 root
+```
+
+### 修复（DT 侧，两处）
+
+1. **`iommu@fde4b000 status = "disabled"`** → `rknpu_is_iommu_enable()` 检测到 disabled
+   自动切 **non-iommu mode**（驱动源码的专用逃生门）→ 跳过 group → probe 通过。
+   推理经实测**不需要** IOMMU（rknn 走 CMA/dma_heap 物理连续内存）。
+2. **`npu@fde40000` 补 `interrupt-names = "npu_irq"`**（飞牛驱动按名取中断）。
+
+### 验收（2026-10-12，冷启动零干预）
+
+```text
+开机 → rknpu non-iommu probe 成功（[drm] Initialized rknpu 0.9.8 minor 1）
+     → npu 域 off-0（节能，正常）
+root 跑 img2vec_medium.rk3568.rknn：
+  init_runtime: 0 → OK 3607.7ms outs=[(1, 768)]     ← 真实推理输出
+  中断 122: 0 → 25                                   ← NPU 硬件真实工作
+  npu 域 自动 pwrup: off → on / active               ← runtime PM 上电成功
+  ack 错误：全程 0 新增（仅开机历史一条，无害）
+```
+
+**使用注意**：
+- 推理用 **root**（fnOS `ai_manager.service` 本来就是 root，不受影响）；
+  测试命令：`sudo /vol1/@appcenter/trim.ai-runtime-rk3568/penv/bin/python3 <脚本>`
+- 若未来飞牛内核修好 pm_domain 的 pwrup 握手，把 `iommu@fde4b000` 改回 `okay`
+  即可恢复 IOMMU 模式（DT 注释里留了完整开关说明）。
 
 ---
 

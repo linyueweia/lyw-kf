@@ -6471,7 +6471,21 @@
 	clocks = <&{/clock-controller@fdd20000} 0x28 &{/clock-controller@fdd20000} 0x29>;
 	#iommu-cells = <0x00>;
 	compatible = "rockchip,iommu-v2";
-	status = "okay";
+	/* ★2026-10-12 NPU 彻查结论（三层根因之一，实测修复）：
+	   okay 时的故障链：本 iommu 的 power-domains=npu 域 → 飞牛 6.18 的
+	   rockchip-pm-domain 在冷启动给 npu 域 pwrup 时 idle 握手过不去
+	   （"failed to get ack on domain 'npu', val=0x1ee"，54s/127s 稳定复现）
+	   → 本 IOMMU 控制器 probe 被挡、/sys/class/iommu 里不出现
+	   → npu 设备进不了任何 iommu group → rknpu_probe 里
+	   `iommu_group_get(dev)==NULL → return -EINVAL(-22)` → 无 NPU。
+	   注：官方 Debian/Ubuntu/Android 的 DTB 与我们逐项一致（同样 okay），
+	   差异在飞牛内核的 pm_domain 握手实现，DT 侧无法根治；
+	   rknpu_is_iommu_enable() 对本节点 disabled 会自动切
+	   "non-iommu mode"（专用逃生门）→ probe 通过、推理实测可用。
+	   实测：冷启动零干预 root 跑 img2vec 模型 → 域自动 pwrup、
+	   NPU 中断 0→25、输出 (1,768) 向量，全程无新增 ack 错误。
+	   若未来飞牛内核修好 pwrup 握手，可把这里改回 "okay" 恢复 IOMMU 模式。 */
+	status = "disabled";
 	interrupt-names = "rknpu_mmu";
 	reg = <0x00 0xfde4b000 0x00 0x40>;
 	};
@@ -6853,6 +6867,11 @@
 	assigned-clock-rates = <0x23c34600>;
 	resets = <&{/clock-controller@fdd20000} 0x2b &{/clock-controller@fdd20000} 0x2c>;
 	interrupts = <0x00 0x97 0x04>;
+	/* 飞牛 6.18 的 rknpu 驱动按名字取中断（platform_get_irq_byname("npu_irq")），
+	   官方三镜像的 DTB 均无此属性（官方内核按 index 取），不补则每次开机
+	   打 "IRQ npu_irq not found"（驱动容错回退到 index 0，中断实际可用）。
+	   补上后日志干净、语义明确：SPI 151 → GICv3 183。 */
+	interrupt-names = "npu_irq";
 	clocks = <&{/firmware/scmi/protocol@14} 0x02 &{/clock-controller@fdd20000} 0x23 &{/clock-controller@fdd20000} 0x28 &{/clock-controller@fdd20000} 0x29>;
 	reg = <0x00 0xfde40000 0x00 0x10000>;
 	reset-names = "srst_a", "srst_h";
