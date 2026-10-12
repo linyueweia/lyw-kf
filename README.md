@@ -2,6 +2,10 @@
 
 为 **KICKPI K1 V1.2（RK3568B2）** 生成可启动的 **飞牛 fnOS ARM64** 固件镜像。
 
+> **📌 移植总指南（下次适配照此走）→ [PORTING.md](PORTING.md)**：全流程清单、
+> 十大坑总表、**网口五层坑的完整修复（DT 复位归属 / PHY 驱动 / vermagic / 加载顺序 / GMAC4 MDC 时钟）**、
+> 启动链、验收判据。
+>
 > **踩坑与修复全记录 → [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**（2026-10-12：
 > FIT 哈希被打坏导致刷 eMMC 起不来 / 在线更新后网口全灭 / 静态 PARTUUID 串盘 /
 > Windows 读不了 ext4 盘，四条问题的串口原文、取证链、根因、修复与验收判据都在里面）。
