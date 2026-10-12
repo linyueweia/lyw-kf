@@ -31,20 +31,14 @@ if [[ ! -d "$KDIR" ]]; then
     exit 1
 fi
 
-# 幂等：四个模块都已在该内核目录且 vermagic 正确 → 不重复编译
-have_all=1
-for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do
-    ko="$DEST/$m.ko"
-    if [[ -f "$ko" ]] && strings "$ko" | grep -q "vermagic=.*$REL"; then
-        :
-    else
-        have_all=0
-    fi
-done
-if [[ $have_all -eq 1 ]]; then
-    say "✓ $REL 已有全部板级模块，跳过编译"
+# 幂等：maxio 是唯一必须自编的（网口 PHY 硬依赖）。它已就位且 vermagic 匹配 → 秒过。
+# WiFi/BT 不归本脚本管：飞牛官方内核自带 updates/trim/seekwave-swt6621s/ 三件套，
+# 随内核更新，永远不需要我们编译（2026-10-12 实测确认）。
+if [[ -f "$DEST/maxio.ko" ]] && strings "$DEST/maxio.ko" 2>/dev/null | grep -q "vermagic=.*$REL"; then
+    say "✓ $REL 已有 maxio.ko，跳过编译（WiFi/BT 用官方自带 seekwave）"
     exit 0
 fi
+say "…需要为 $REL 编译 maxio"
 
 command -v make >/dev/null 2>&1 || { say "✗ 无 make（build-essential 未装）"; exit 1; }
 command -v gcc  >/dev/null 2>&1 || { say "✗ 无 gcc（build-essential 未装）"; exit 1; }
@@ -73,41 +67,16 @@ else
     tail -15 "$WORK/maxio.log" | tee -a "$LOG"
 fi
 
-# ── WiFi/BT：优先用官方自带的 seekwave（2026-10-12 实测确认）─────────────────
-# 官方内核包自带 updates/trim/seekwave-swt6621s/{swt6621s_wifi,skwbt,skw_sdio_lite,skw_usb_lite}.ko，
-# 随内核一起更新。所以先探测：官方有就绝不自己编（在新内核上自编还容易失败、且与官方重复）。
+# ── WiFi/BT：官方自带，本脚本不编译 ──────────────────────────────────
+# 飞牛官方内核包自带 updates/trim/seekwave-swt6621s/
+#   {swt6621s_wifi,skwbt,skw_sdio_lite,skw_usb_lite}.ko，随内核一起更新，
+# 实测存在且可加载（2026-10-12）。所以我们只编 maxio，WiFi 一律用官方的。
 OFFICIAL_WIFI="/usr/lib/modules/$REL/updates/trim/seekwave-swt6621s"
-WD="$WORK/wifi"
 if compgen -G "$OFFICIAL_WIFI/*.ko" >/dev/null 2>&1; then
-    say "✓ 官方已带 seekwave WiFi/BT（$OFFICIAL_WIFI），跳过自编"
+    say "✓ 官方 seekwave 三件套在（$OFFICIAL_WIFI），WiFi 不自编"
     WIFI_SRC="官方包"
-elif [[ -d "$SRCDIR/swt6621s" ]]; then
-    cp -a "$SRCDIR/swt6621s" "$WD"
-    if "${MK[@]}" M="$WD" \
-        CONFIG_SEEKWAVE_BSP_DRIVERS=m CONFIG_SKW_NO_CONFIG=y CONFIG_SKW_SDIOHAL=m \
-        CONFIG_WLAN_VENDOR_SWT6621S=m CONFIG_SKW_BT=m \
-        >"$WORK/wifi.log" 2>&1; then
-        got=0
-        for ko in $(find "$WD" -name '*.ko'); do
-            b="$(basename "$ko")"
-            if strings "$ko" | grep -q "vermagic=.*$REL"; then
-                cp -f "$ko" "$DEST/$b"; got=$((got+1))
-            else
-                say "✗ $b vermagic 不符 $REL，未安装"
-            fi
-        done
-        say "✓ 自编 SWT6621S 装入 $got 个模块"
-        WIFI_SRC="自编 $got 个"
-    else
-        # 真正的编译错误在 make 的 Error N 之前，单独抽 error: 行，别只看到 make 的收尾
-        say "✗ SWT6621S 编译失败，真实错误行："
-        grep -aE "error:|Error:|No such file|undefined reference" "$WORK/wifi.log" 2>/dev/null \
-            | tail -12 | tee -a "$LOG"
-        say "  （官方无 seekwave 且自编失败 → 该内核无 WiFi/BT，网口不受影响）"
-        WIFI_SRC="失败"
-    fi
 else
-    say "⚠ 官方无 seekwave、且 $SRCDIR/swt6621s 源未注入 → 该内核无 WiFi/BT"
+    say "⚠ 该内核没带官方 seekwave（$OFFICIAL_WIFI 为空）→ 本内核无 WiFi（不影响网口）"
     WIFI_SRC="缺失"
 fi
 
