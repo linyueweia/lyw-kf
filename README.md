@@ -2,6 +2,11 @@
 
 为 **KICKPI K1 V1.2（RK3568B2）** 生成可启动的 **飞牛 fnOS ARM64** 固件镜像。
 
+> **踩坑与修复全记录 → [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**（2026-10-12：
+> FIT 哈希被打坏导致刷 eMMC 起不来 / 在线更新后网口全灭 / 静态 PARTUUID 串盘 /
+> Windows 读不了 ext4 盘，四条问题的串口原文、取证链、根因、修复与验收判据都在里面）。
+> 离线读盘工具在 [`tools/offline-read/`](tools/offline-read/)（免装驱动，需管理员权限）。
+
 方法沿用同一块板子上已验证的 [xck-nas](https://github.com/linyueweia/xck-nas)（LYT T68M）路线：
 **飞牛官方通用基镜像 + 本板 DTB + 本板所需树外模块**，**不改动飞牛内核本身**
 （飞牛的「文件回收站 / 文件权限管理」等特性依赖官方内核里的 FilesACL 模块，换内核即丢功能；
@@ -39,6 +44,8 @@ patches/wifi-6.18-port.patch    驱动移植补丁（12 文件 +64/-41，可干�
 uboot/rk3568/kickpi-k1/         引导配置 + DDR 决策记录（含实测证据）
 build-k1-fnos.sh                镜像装配（走官方 boot.scr：part uuid 现场取分区身份，不写死 UUID）
 tools/fit-resign.py             FIT 哈希校验/重签（改写 FIT 内负载后必跑，否则 SPL 拒载）
+tools/offline-read/             离线读盘（Windows 免装驱动）：ext4 列举/提取、btrfs 列举/提取、原始磁盘对齐读
+TROUBLESHOOTING.md              故障复盘：串口原文、取证链、根因、修复、验收判据
 verify-fnos-bootchain.sh        引导链六环验证
 fetch-uboot-from-kk.sh          从 kk(iNextOS) 构建产物取本板 u-boot 对（含 DDR 防呆）
 ```
