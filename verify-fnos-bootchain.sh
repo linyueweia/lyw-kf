@@ -125,6 +125,15 @@ fi
 grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/fnEnv.txt" 2>/dev/null && ok "fnEnv 指向本板 DTB" \
     || { grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/extlinux/extlinux.conf" 2>/dev/null && ok "extlinux 指向本板 DTB" || bad "引导配置未指向本板 DTB"; }
 
+# FIT 哈希门禁：镜像里 u-boot.itb 的任一 image 节点 sha256 与负载不符 →
+# SPL 直接拒载（2026-10-12 实机：boot_targets 就地补丁未重签 →
+# "sha256 error! ... SPL: failed to boot from all boot devices"）。
+if [[ -f "$(dirname "$0")/tools/fit-resign.py" ]]; then
+    python3 "$(dirname "$0")/tools/fit-resign.py" "$IMG" >/dev/null 2>&1 \
+        && ok "FIT 哈希自洽（u-boot/atf/fdt 与负载一致，SPL 会放行）" \
+        || bad "FIT 哈希不自洽 → SPL 拒绝启动（刷进 eMMC/TF 都起不来，须跑 tools/fit-resign.py --fix）"
+fi
+
 HIT=0
 # 递归扫 p1 内所有小文件（旧版 `for f in "$MNT_B"/*` 只看顶层，恰好漏掉
 # extlinux/extlinux.conf、grub/grub.cfg、boot.scr —— 真正会写 root=/dev/mmcblk0p2 的地方）

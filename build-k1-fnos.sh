@@ -126,6 +126,24 @@ else
 fi
 
 echo
+echo "==== 2c) FIT 哈希重签（必做门禁）===="
+# ⚠ 血的教训（2026-10-12 实机）：2b 就地改写了 FIT 内 u-boot 负载的 13 字节，
+# 但 FIT 里 u-boot 节点的 sha256 没重算 → SPL 校验：
+#     ## Checking hash(es) for Image u-boot ... sha256 error!
+#     SPL: failed to boot from all boot devices
+# 也就是【镜像刷进 eMMC 必然起不来】，TF 卡同样起不来。任何对 FIT 内负载的
+# 就地改写之后，都必须用 tools/fit-resign.py 重签并复核，这里做成硬门禁。
+FIT_TOOL="$(dirname "$0")/tools/fit-resign.py"
+if [[ -f "$FIT_TOOL" ]]; then
+    python3 "$FIT_TOOL" --fix "$IMG" || true
+    python3 "$FIT_TOOL" "$IMG" \
+        || fail "FIT 哈希校验未通过（u-boot/atf/fdt 节点 sha256 与负载不符 → SPL 必然拒载）"
+    echo "  ✓ FIT 全部 image 节点哈希自洽"
+else
+    fail "缺少 tools/fit-resign.py：改写 FIT 内负载后不重签，SPL 会拒绝启动"
+fi
+
+echo
 echo "==== 3) 挂载镜像分区，取自身 PARTUUID 并配置引导 ===="
 cleanup() {
     mountpoint -q "$BOOT_MNT" && umount_safe "$BOOT_MNT" || true
@@ -185,6 +203,14 @@ mkdir -p "$BOOT_MNT/extlinux"
 cat > "$BOOT_MNT/extlinux/extlinux.conf" <<EOF
 label fnOS (KICKPI K1)
     kernel /vmlinuz
+    fdt /dtb/rockchip/$DTB_NAME
+    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
+
+# 备用条目：显式指向本次构建/验证过的内核文件（不跟随 /vmlinuz 软链）。
+# 在线更新把 /vmlinuz 指到新内核后若出问题，可在 u-boot 菜单选这一项回退；
+# 默认条目仍是 /vmlinuz（跟随最新内核），在线更新照常用。
+label fnOS (KICKPI K1) - pinned-$KREL
+    kernel /vmlinuz-$KREL
     fdt /dtb/rockchip/$DTB_NAME
     append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
 EOF
@@ -521,7 +547,62 @@ WRAP
         [[ "$_n" == "3" ]] || fail "kickpi-k1-modules.service ExecStart 分词成 $_n 项（应为 3）→ sh -c 只会跑第一条命令"
     fi
     [[ -f "$OSFIX/etc/modprobe.d/kickpi-k1.conf" ]] || fail "缺 modprobe.d softdep（maxio 先于 dwmac_rk）"
-    echo "  ✓ OS 层修复已固化（日志收集 / 模块清单 / 服务 mask / 内核日志级别）"
+    # (5) 【在线更新防护】板级模块源码 + 按运行内核自愈（2026-10-12 实机根因修复）
+    # 飞牛在线更新会安装新内核（c951-trim → c1145-trim 实测），旧做法把 .ko 注入到
+    # 构建期那一个内核目录、服务里写死 release，于是更新后：
+    #   /usr/lib/modules/<新内核>/updates/kickpi-k1/ 不存在 → maxio(PHY) 不加载
+    #   → 双网口全灭。改成【模块跟着内核走】：
+    #   · 源码进 /usr/src/kickpi-k1/，本机 gcc/make 就能编（基镜像已带 build-essential）
+    #   · /etc/kernel/postinst.d/zz-kickpi-k1-modules 每装一个新内核就自动重编并装好
+    #   · 开机服务按 uname -r 定位 + 头文件未就绪时留标记、开机补编
+    #   · extlinux 默认条目仍是 /vmlinuz（跟随最新内核），另加一条显式内核的备用条目
+    install -Dm755 "$ASSETS/kickpi-k1-build-modules.sh" "$OSFIX/usr/local/sbin/kickpi-k1-build-modules.sh"
+    install -Dm755 "$ASSETS/kickpi-k1-load-modules"     "$OSFIX/usr/local/sbin/kickpi-k1-load-modules"
+    install -Dm755 "$ASSETS/zz-kickpi-k1-modules"       "$OSFIX/etc/kernel/postinst.d/zz-kickpi-k1-modules"
+    mkdir -p "$OSFIX/usr/src/kickpi-k1"
+    cp -f "$(dirname "$0")/modules/src/maxio.c" "$OSFIX/usr/src/kickpi-k1/maxio.c"
+    # SWT6621S 源（与 build-modules.sh 同源同补丁）；拿不到只影响 WiFi/BT，不算致命
+    if command -v git >/dev/null 2>&1; then
+        WIFISRC="${WIFI_SRC:-https://github.com/retro98boy/seekwave-swt6621s}"
+        if git clone --depth 1 "$WIFISRC" "$OSFIX/usr/src/kickpi-k1/swt6621s" >/dev/null 2>&1; then
+            if git -C "$OSFIX/usr/src/kickpi-k1/swt6621s" apply "$(dirname "$0")/patches/wifi-6.18-port.patch" >/dev/null 2>&1; then
+                echo "  ✓ 已注入板级模块源（maxio + SWT6621S 已打 6.18 补丁）"
+            else
+                echo "  ⚠ SWT6621S 补丁应用失败，WiFi/BT 无法随内核自愈（网口不受影响）"
+            fi
+        else
+            echo "  ⚠ 拉取 SWT6621S 源失败，WiFi/BT 无法随内核自愈（网口不受影响）"
+        fi
+    else
+        echo "  ⚠ 无 git，跳过注入 SWT6621S 源"
+    fi
+    # 开机单元改为按【运行内核】定位（覆盖前面写死 release 的版本）
+    cat > "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" <<'K1EOF'
+[Unit]
+Description=Load KICKPI K1 board modules for the RUNNING kernel (self-heal on new kernel)
+DefaultDependencies=no
+Before=network-pre.target systemd-modules-load.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# uname -r 在这里是 sh 展开，systemd 不做变量替换 → 始终作用于当前运行内核。
+ExecStart=/bin/sh -c "/usr/local/sbin/kickpi-k1-build-modules.sh $(uname -r); /usr/local/sbin/kickpi-k1-load-modules; /sbin/modprobe dwmac_rk"
+
+[Install]
+WantedBy=sysinit.target
+K1EOF
+    ln -sf ../kickpi-k1-modules.service \
+        "$OSFIX/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules.service"
+    echo "  ✓ 已装板级模块自愈链（源码 + postinst 钩子 + 按 uname -r 的开机单元）"
+    [[ -x "$OSFIX/etc/kernel/postinst.d/zz-kickpi-k1-modules" ]] \
+        || fail "zz-kickpi-k1-modules 未就位（新内核装完不会自动重编板级模块 → 更新后网口全灭）"
+    [[ -f "$OSFIX/usr/src/kickpi-k1/maxio.c" ]] || fail "maxio.c 源未注入（设备端无法随内核重编）"
+    grep -qs 'uname -r' "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" \
+        || fail "kickpi-k1-modules.service 未按 uname -r 定位（在线更新后会加载不到模块）"
+
+    echo "  ✓ OS 层修复已固化（日志收集 / 模块清单 / 服务 mask / 内核日志级别 / 在线更新自愈）"
 
 # OTA 引导同步脚本（若基镜像自带则保留）
 # umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（明明该做的都做完了）。

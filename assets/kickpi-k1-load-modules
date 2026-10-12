@@ -1,0 +1,41 @@
+#!/bin/sh
+# KICKPI K1：按【当前运行内核】确定性加载板级模块（顺序有讲究）。
+#   maxio      —— Maxio MAE0621A PHY 驱动，必须先于 MAC 驱动注册
+#   stmmac/dwmac_rk —— 两个 GMAC 的驱动，本内核为 =m，必须显式拉起
+#   swt6621s_wifi / skw_sdio_lite / skwbt —— WiFi/BT（有符号依赖，走 modprobe）
+# 兼容在线更新：模块目录按 uname -r 定位，装在 updates/kickpi-k1/。
+set -u
+
+REL="$(uname -r)"
+DEST="/usr/lib/modules/$REL/updates/kickpi-k1"
+LOG="/var/log/kickpi-k1-modules.log"
+
+say() { echo "[k1-load] $*" | tee -a "$LOG" >/dev/null; }
+
+# 先按依赖顺序 modprobe（走 modules.dep / softdep，最稳）
+for m in maxio stmmac dwmac_rk; do
+    if ! /sbin/modprobe "$m" 2>>"$LOG"; then
+        say "modprobe $m 失败（该内核可能缺板级模块，见 $LOG）"
+    fi
+done
+
+# 绝对路径 insmod 兜底：maxio/skw_sdio_lite 无外部依赖，depmod 坏了也能装
+for m in maxio skw_sdio_lite; do
+    if ! /sbin/modprobe -s "$m" 2>/dev/null; then
+        [ -f "$DEST/$m.ko" ] && /sbin/insmod "$DEST/$m.ko" 2>>"$LOG" \
+            || say "$m 不可加载（$DEST/$m.ko 不存在或 vermagic 不符）"
+    fi
+done
+
+# WiFi/BT 有符号依赖，只能走 modprobe
+for m in swt6621s_wifi skwbt; do
+    /sbin/modprobe "$m" 2>>"$LOG" || say "modprobe $m 失败（可选设备，不影响网口）"
+done
+
+# 自检：把结果写进日志，方便开机后从 /boot/k1logs 判读
+{
+    echo "---- kickpi-k1 load selfcheck ($(date '+%F %T')) kernel=$REL ----"
+    lsmod | grep -E '^(maxio|stmmac|dwmac_rk|swt6621s_wifi|skwbt|skw_sdio_lite)' || echo "(无板级模块加载)"
+    dmesg 2>/dev/null | grep -E 'MAE0621A|phy_id=0x7b744411|Link is Up' | tail -6
+} >>"$LOG" 2>&1
+exit 0
