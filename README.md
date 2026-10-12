@@ -41,13 +41,12 @@ modules/firmware/               SWT6621S 固件 15 个（取自实机原厂系�
   6.18.18.c951-trim；曾提交的预编 .ko 是 6.18.18-trim 社区包产物，装机必被拒）
 patches/wifi-6.18-port.patch    驱动移植补丁（12 文件 +64/-41，可干净应用到原始源码）
 
-uboot/rk3568/kickpi-k1/         引导配置 + DDR 决策记录（含实测证据）
+（u-boot 无仓库文件：恒用飞牛基镜像自带引导件 —— 2026-10-08 实测结论见 workflow 注释）
 build-k1-fnos.sh                镜像装配（走官方 boot.scr：part uuid 现场取分区身份，不写死 UUID）
 tools/fit-resign.py             FIT 哈希校验/重签（改写 FIT 内负载后必跑，否则 SPL 拒载）
 tools/offline-read/             离线读盘（Windows 免装驱动）：ext4 列举/提取、btrfs 列举/提取、原始磁盘对齐读
 TROUBLESHOOTING.md              故障复盘：串口原文、取证链、根因、修复、验收判据
 verify-fnos-bootchain.sh        引导链六环验证
-fetch-uboot-from-kk.sh          从 kk(iNextOS) 构建产物取本板 u-boot 对（含 DDR 防呆）
 ```
 
 ## 双千兆网口：取证结论与修复（2026-10）
@@ -111,15 +110,11 @@ K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 r
 ## 用法
 
 ```bash
-# 1) 取本板 u-boot 对（从 kk 构建产物，带 DDR 防呆）
-./fetch-uboot-from-kk.sh <kk_run_id> uboot/rk3568/kickpi-k1
-
-# 2) 按基镜像 header 现编 4 个模块（maxio + SWT6621S 三件套；vermagic 硬闸）
+# 1) 按基镜像 header 现编 4 个模块（maxio + SWT6621S 三件套；vermagic 硬闸）
 ./build-modules.sh <基镜像> built-modules
 
-# 3) 装配镜像（基镜像 + u-boot + DTB + 模块注入 + depmod + 固件 + softdep）
+# 2) 装配镜像（基镜像自带 u-boot 原样保留 + DTB + 模块注入 + depmod + 固件 + softdep）
 BASE=path/to/fnnas-official-arm64-image_rockchip.img \
-UBOOT_DIR=uboot/rk3568/kickpi-k1 \
 DTB=dist/rk3568-kickpi-k1.dtb \
 MODULES_DIR=built-modules \
 ./build-k1-fnos.sh

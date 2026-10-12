@@ -16,9 +16,8 @@
 #          照抄 T68M 的配置会挂到厂商 eMMC 根分区（写入风险）。
 #
 # 用法:
-#   BASE=/path/fnnas-base.img  UBOOT_DIR=uboot/rk3568/kickpi-k1  \
-#   DTB=dist/rk3568-kickpi-k1.dtb  MODULES_DIR=modules  \
-#   ./build-k1-fnos.sh
+#   BASE=/path/fnnas-base.img  DTB=dist/rk3568-kickpi-k1.dtb  \
+#   MODULES_DIR=modules  ./build-k1-fnos.sh
 set -euo pipefail
 
 # umount 加固：实测出现过 "target is busy" 让 set -e 直接退出（该做的都做完了却判失败）。
@@ -35,11 +34,10 @@ umount_safe() {
 }
 
 BASE="${BASE:?需要 BASE=<飞牛基镜像 .img>}"
-# UBOOT_DIR 可选：
-#   留空 = 保留基镜像自带的引导件（飞牛基镜像本身就是可启动的 RK3568 镜像，
-#          这是第一发最稳的打法：只换 DTB 与引导配置，不动 bootloader）
-#   指定 = 用为本板编译的那一对覆盖（当基镜像的 DDR 初始化与本板不匹配时才需要）
-UBOOT_DIR="${UBOOT_DIR:-}"
+# u-boot：恒用基镜像自带引导件（2026-10-08 实测结论，详见 workflow 同名注释）：
+#   自建对（DDR v1.26 + U-Boot 2023.10）SPL 阶段即断（电源灯亮系统灯不亮）；
+#   基镜像 v1.23-03ea844c5d 与本板 eMMC 原厂同版本同哈希。UBOOT_DIR 覆盖
+#   机制与自建素材已按「跟官方原生走」原则删除。
 DTB="${DTB:?需要 DTB=<rk3568-kickpi-k1.dtb>}"
 MODULES_DIR="${MODULES_DIR:-}"
 DEVICE_LABEL="${DEVICE_LABEL:-KICKPI-K1}"
@@ -57,7 +55,7 @@ fail() { echo "✗ $*" >&2; exit 1; }
 
 # ── 安全闸：禁止任何设备路径 ────────────────────────────────
 case "$BASE" in /dev/*) fail "BASE 必须是镜像文件，不允许设备节点：$BASE";; esac
-for p in "$UBOOT_DIR" "$DTB"; do
+for p in "$DTB"; do
     case "$p" in /dev/*) fail "路径必须是文件：$p";; esac
 done
 
@@ -65,19 +63,12 @@ echo "==== 0) 前置校验 ===="
 [[ -f "$BASE" ]] || fail "基镜像不存在: $BASE"
 [[ -f "$DTB" ]] || fail "缺少 DTB: $DTB"
 
-if [[ -n "$UBOOT_DIR" ]]; then
-    for f in idbloader.img u-boot.itb; do
-        [[ -f "$UBOOT_DIR/$f" ]] || fail "缺少 $UBOOT_DIR/$f"
-    done
-    DDR_LINE="$(strings "$UBOOT_DIR/idbloader.img" | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -1 || true)"
-    echo "  待注入 idbloader DDR 固件: ${DDR_LINE:-未识别}"
-    if strings "$UBOOT_DIR/idbloader.img" | grep -q 'V1.18 f366f69a7d'; then
-        fail "idbloader 是 T68M 的 DDR V1.18（与本板 1560MHz 不匹配），拒绝使用"
-    fi
-    echo "  → 将用该 u-boot 对覆盖基镜像自带的引导件"
-else
-    echo "  → 保留基镜像自带 bootloader（第一发最稳打法）；其 idbloader 的 DDR 固件为:"
-    strings "$BASE" -n 8 2>/dev/null | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /' || true
+# 保留基镜像自带 bootloader（2026-10-08 实测：自建 v1.26 SPL 断，
+# 基镜像 v1.23 与本板 eMMC 原厂同哈希）；同时断言其 DDR 不是已知坏值。
+echo "  → 使用基镜像自带 bootloader；其 idbloader 的 DDR 固件为:"
+strings "$BASE" -n 8 2>/dev/null | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /' || true
+if strings "$BASE" -n 8 2>/dev/null | grep -q 'V1.18 f366f69a7d'; then
+    fail "基镜像 idbloader 是 T68M 的 DDR V1.18（与本板 1560MHz 不匹配），拒绝使用"
 fi
 echo "  DTB sha256: $(sha256sum "$DTB" | cut -c1-16)…"
 
@@ -92,18 +83,10 @@ echo "  ✓ $IMG ($(stat -c%s "$IMG") 字节)"
 
 echo
 echo "==== 2) 引导件处理 ===="
-if [[ -n "$UBOOT_DIR" ]]; then
-    echo "  写入本板 u-boot 对（LBA 64 / 16384）"
-    dd if="$UBOOT_DIR/idbloader.img" of="$IMG" bs=512 seek=64    conv=notrunc,fsync status=none
-    dd if="$UBOOT_DIR/u-boot.itb"    of="$IMG" bs=512 seek=16384 conv=notrunc,fsync status=none
-    sync
-    echo "  ✓ 已覆盖写入"
-else
-    echo "  保留基镜像自带 bootloader（未做任何覆盖）"
-    echo "     基镜像 LBA64 处的 DDR 固件:"
-    dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_k1base_idb.img
-    strings /tmp/_k1base_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /'
-fi
+echo "  保留基镜像自带 bootloader（未做任何覆盖，跟官方原生走）"
+echo "     产物 LBA64 处的 DDR 固件:"
+dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_k1base_idb.img
+strings /tmp/_k1base_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /'
 
 echo
 echo "==== 2b) 修正 U-Boot 内置默认 env 的 boot_targets（USB 优先 → mmc 优先）===="
