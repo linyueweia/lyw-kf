@@ -271,41 +271,6 @@
 		};
 	};
 
-	usb@fcc00000 {
-		compatible = "rockchip,rk3568-dwc3\0snps,dwc3";
-		reg = <0x00 0xfcc00000 0x00 0x400000>;
-		interrupts = <0x00 0xa9 0x04>;
-		clocks = <0x0f 0xa6 0x0f 0xa7 0x0f 0xa5>;
-		clock-names = "ref_clk\0suspend_clk\0bus_clk";
-		dr_mode = "otg";
-		phy_type = "utmi_wide";
-		power-domains = <0x10 0x0f>;
-		resets = <0x0f 0x94>;
-		snps,dis_u2_susphy_quirk;
-		status = "okay";
-		phys = <0x13 0x14 0x04>;
-		phy-names = "usb2-phy\0usb3-phy";
-		extcon = <0x15>;
-		phandle = <0xec>;
-	};
-
-	usb@fd000000 {
-		compatible = "rockchip,rk3568-dwc3\0snps,dwc3";
-		reg = <0x00 0xfd000000 0x00 0x400000>;
-		interrupts = <0x00 0xaa 0x04>;
-		clocks = <0x0f 0xa9 0x0f 0xaa 0x0f 0xa8>;
-		clock-names = "ref_clk\0suspend_clk\0bus_clk";
-		dr_mode = "host";
-		phys = <0x16 0x11 0x04>;
-		phy-names = "usb2-phy\0usb3-phy";
-		phy_type = "utmi_wide";
-		power-domains = <0x10 0x0f>;
-		resets = <0x0f 0x95>;
-		snps,dis_u2_susphy_quirk;
-		status = "okay";
-		phandle = <0xed>;
-	};
-
 	interrupt-controller@fd400000 {
 		compatible = "arm,gic-v3";
 		reg = <0x00 0xfd400000 0x00 0x10000 0x00 0xfd460000 0x00 0x80000>;
@@ -528,6 +493,23 @@
 			vcc8-supply = <0x26>;
 			vcc9-supply = <0x26>;
 			phandle = <0xf4>;
+
+			codec {
+				#sound-dai-cells = <0x01>;
+				assigned-clock-parents = <&{/clock-controller@fdd20000} 0x48 &{/clock-controller@fdd20000} 0x48>;
+				assigned-clock-rates = <0xbb8000>;
+				assigned-clocks = <&{/clock-controller@fdd20000} 0x1a3 &{/clock-controller@fdd20000} 0x1a6>;
+				clock-names = "mclk";
+				clocks = <&{/clock-controller@fdd20000} 0x1a3>;
+				compatible = "rockchip,rk809-codec", "rockchip,rk817-codec";
+				hp-volume = <0x00>;
+				mic-in-differential;
+				pinctrl-0 = <&{/pinctrl/i2s1/i2s1m0-mclk}>;
+				pinctrl-names = "default";
+				spk-ctl-gpios = <&{/pinctrl/gpio@fe770000} 0x16 0x00>;
+				spk-volume = <0x00>;
+				status = "okay";
+			};
 
 			regulators {
 
@@ -809,6 +791,13 @@
 			#size-cells = <0x00>;
 			phandle = <0x10>;
 
+			power-domain@6 {
+				reg = <0x06>;
+				clocks = <&{/clock-controller@fdd20000} 0x27 &{/clock-controller@fdd20000} 0x25 &{/clock-controller@fdd20000} 0x26>;
+				pm_qos = <&{/qos@fe180000}>;
+				#power-domain-cells = <0x00>;
+			};
+
 			power-domain@7 {
 				reg = <0x07>;
 				clocks = <0x0f 0x19 0x0f 0x1a>;
@@ -881,8 +870,19 @@
 		#cooling-cells = <0x02>;
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x07>;
 		status = "okay";
-		operating-points-v2 = <0x4a>;
-		mali-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG2}>;};
+		operating-points-v2 = <&{/opp-table2}>;
+		mali-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG2}>;
+
+		power-model {
+			compatible = "simple-power-model";
+			thermal-zone = "gpu-thermal";
+			leakage-range = <0x05 0x0f>;
+			ls = <0xffffa23e 0x5927 0x00>;
+			ts = <0xfffe56a6 0xf87a 0xfffffab5 0x14>;
+			static-coefficient = <0x186a0>;
+			dynamic-coefficient = <0x3b9>;
+		};
+	};
 
 	video-codec@fdea0400 {
 		compatible = "rockchip,rk3568-vpu";
@@ -910,11 +910,11 @@
 		status = "okay";};
 
 	rga@fdeb0000 {
-		compatible = "rockchip,rk3568-rga\0rockchip,rk3288-rga";
+		compatible = "rockchip,rga2\0rockchip,rk3568-rga\0rockchip,rk3288-rga";
 		phandle = <0x102>;
 	
 		status = "okay";
-		resets = <&{/clock-controller@fdd20000} 0x126 0x12 0x124 0x12 0x125>;
+		resets = <&{/clock-controller@fdd20000} 0x126 &{/clock-controller@fdd20000} 0x124 &{/clock-controller@fdd20000} 0x125>;
 		reset-names = "core", "axi", "ahb";
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
 		clock-names = "aclk_rga", "hclk_rga", "clk_rga";
@@ -930,7 +930,7 @@
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
 		iommus = <&{/iommu@fdee0800}>;
 		clock-names = "aclk_vcodec", "hclk_vcodec";
-		resets = <&{/clock-controller@fdd20000} 0x12e 0x24 0x12f>;
+		resets = <&{/clock-controller@fdd20000} 0x12e &{/clock-controller@fdd20000} 0x12f>;
 		interrupts = <0x00 0x40 0x04>;
 		clocks = <&{/clock-controller@fdd20000} 0xfd &{/clock-controller@fdd20000} 0xfe>;
 		rockchip,srv = <&{/mpp-srv}>;
@@ -951,23 +951,10 @@
 	
 		status = "okay";};
 
-	video-codec@fdf80100 {
-		compatible = "rockchip,rk3568-vdec";
-		reg = <0x00 0xfdf80200 0x00 0x500 0x00 0xfdf80100 0x00 0x100 0x00 0xfdf80700 0x00 0x100>;
-		reg-names = "function\0link\0cache";
-		interrupts = <0x00 0x5b 0x04>;
-		clocks = <0x0f 0x108 0x0f 0x109 0x0f 0x10a 0x0f 0x10b 0x0f 0x10c>;
-		clock-names = "axi\0ahb\0cabac\0core\0hevc_cabac";
-		assigned-clocks = <0x0f 0x108 0x0f 0x10b 0x0f 0x10a 0x0f 0x10c>;
-		assigned-clock-rates = <0x11b3dc40 0x11b3dc40 0x11b3dc40 0x23c34600>;
-		iommus = <0x4b>;
-		power-domains = <0x10 0x0d>;
-		resets = <0x0f 0x142 0x0f 0x143 0x0f 0x144 0x0f 0x145 0x0f 0x146>;
-		reset-names = "axi\0ahb\0cabac\0core\0hevc_cabac";
-		sram = <0x4c>;
-		phandle = <0x104>;
-	};
-
+	// 与 rkvdec@fdf80200 寄存器重叠（fdf80200/fdf80100 两段都撞），金标准实机 DTS 只有
+	// rkvdec@fdf80200；且本内核无任何驱动匹配 "rockchip,rk3568-vdec"
+	// （rockchip-vdec.ko 只认 rockchip,rk3399-vdec、rk_vcodec 里没有该字符串、builtin 无）。
+	// 唯一引用是 __symbols__ 里的 vdec 条目，已一并删除 → 无悬空 phandle。
 	iommu@fdf80800 {
 		compatible = "rockchip,rk3568-iommu";
 		reg = <0x00 0xfdf80800 0x00 0x40 0x00 0xfdf80840 0x00 0x40>;
@@ -1037,12 +1024,16 @@
 		fifo-depth = <0x100>;
 		pinctrl-names = "default";
 		clock-names = "biu", "ciu", "ciu-drive", "ciu-sample";
+		pinctrl-0 = <&{/pinctrl/sdmmc2/sdmmc2m0-bus4} &{/pinctrl/sdmmc2/sdmmc2m0-cmd} &{/pinctrl/sdmmc2/sdmmc2m0-clk}>;
+		cap-sd-highspeed;
+		disable-wp;
+		sd-uhs-sdr104;
 		bus-width = <0x04>;
 		resets = <&{/clock-controller@fdd20000} 0xeb>;
 		interrupts = <0x00 0x64 0x04>;
 		clocks = <&{/clock-controller@fdd20000} 0xc1 &{/clock-controller@fdd20000} 0xc2 &{/clock-controller@fdd20000} 0x18e &{/clock-controller@fdd20000} 0x18f>;
 		status = "okay";
-		mmc-pwrseq = <0xa8>;
+		mmc-pwrseq = <&{/sdio-pwrseq}>;
 		reg = <0x00 0xfe000000 0x00 0x4000>;
 		max-frequency = <0xbebc200>;
 		reset-names = "reset";};
@@ -1055,6 +1046,7 @@
 		assigned-clock-rates = <0x00 0x7735940>;
 		clock_in_out = "output";
 		phy-mode = "rgmii";
+		local-mac-address = [9e e7 fa 63 d2 ce];
 		pinctrl-0 = <0x51 0x52 0x53 0x54 0x55>;
 		snps,reset-gpio = <&{/pinctrl/gpio@fe760000} 0x07 0x01>;
 		snps,reset-active-low;
@@ -1083,6 +1075,29 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			phandle = <0x10a>;
+
+			/* ---- MDIO warm-up placeholder ----
+			 * ROOT CAUSE: stmmac_mdio_reset() performs a dummy MDIO read
+			 * after the PHY reset so the PHY sees one MDC clock and finishes
+			 * its reset. That read is skipped when core_type == GMAC4,
+			 * and RK3568 IS GMAC4. So after snps,reset-gpio releases the PHY,
+			 * MDC stays idle and the PHY never completes reset; the FIRST
+			 * frame of of_mdio's scan (PHYID1) then goes unanswered and reads
+			 * back as 0xffff, yielding phy_id = 0xffff4411 instead of the
+			 * real 0x7b744411. maxio (mask 0x7fffffff) never matches, the
+			 * Generic PHY binds instead, Maxio's private page writes never
+			 * happen, and the MAC dies with 'DMA engine initialization failed'.
+			 *
+			 * This node sits BEFORE the real PHY so it is scanned first. That
+			 * transaction is doomed (-ENODEV: no PHY at address 1) but it
+			 * clocks MDC, letting the real PHY finish its reset; the following
+			 * phy@0 read then returns the correct ID. of_mdio.c only logs
+			 * -ENODEV as "missing" and continues, so registration is safe.
+			 */
+			ethernet-phy@1 {
+				reg = <0x01>;
+				compatible = "ethernet-phy-ieee802.3-c22";
+			};
 
 			ethernet-phy@0 {
 				reg = <0x00>;
@@ -1130,12 +1145,15 @@
 		rockchip,grf = <&{/syscon@fdc60000}>;
 		status = "okay";
 		assigned-clocks = <&{/clock-controller@fdd20000} 0xdf &{/clock-controller@fdd20000} 0x05 &{/clock-controller@fdd20000} 0xe0>;
+		disable-win-move;
 		ports {
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			phandle = <0x06>;
 
 			port@0 {
+				rockchip,primary-plane = <0x04>;
+				rockchip,plane-mask = <0x15>;
 				#address-cells = <0x01>;
 				#size-cells = <0x00>;
 				phandle = <0x10c>;
@@ -1147,12 +1165,16 @@
 			};
 
 			port@1 {
+				rockchip,primary-plane = <0x05>;
+				rockchip,plane-mask = <0x22>;
 				#address-cells = <0x01>;
 				#size-cells = <0x00>;
 				phandle = <0x10d>;
 			};
 
 			port@2 {
+				rockchip,primary-plane = <0x03>;
+				rockchip,plane-mask = <0x08>;
 				#address-cells = <0x01>;
 				#size-cells = <0x00>;
 				phandle = <0x10e>;
@@ -1241,10 +1263,10 @@
 		rockchip,phy-table = <0x58834d4 0x8009 0x00 0x270 0x9d5b340 0x800b 0x00 0x26d 0xb1069a8 0x800b 0x00 0x1ed 0x11b3dc40 0x800b 0x00 0x1ad 0x2367b880 0x8029 0x00 0x88 0x00 0x00 0x00 0x00>;
 		reg = <0x00 0xfe0a0000 0x00 0x20000>;
 		interrupts = <0x00 0x2d 0x04>;
-		clocks = <&{/clock-controller@fdd20000} 0xe6 &{/clock-controller@fdd20000} 0xe7 &{/clock-controller@fdd20000} 0x193 &{/clock-controller@fdd00000} 0x28 &{/clock-controller@fdd20000} 0xda>;
-		clock-names = "iahb", "isfr", "cec", "ref";
+		clocks = <&{/clock-controller@fdd20000} 0xe6 &{/clock-controller@fdd20000} 0xe7 &{/clock-controller@fdd20000} 0x193 &{/clock-controller@fdd00000} 0x02 &{/clock-controller@fdd20000} 0xde>;
+		clock-names = "iahb", "isfr", "cec", "ref", "hclk";
 		pinctrl-names = "default";
-		pinctrl-0 = <&{/pinctrl/hdmitx/hdmitx-scl} 0x64 0x65>;
+		pinctrl-0 = <&{/pinctrl/hdmitx/hdmitx-scl} &{/pinctrl/hdmitx/hdmitx-sda} &{/pinctrl/hdmitx/hdmitxm0-cec}>;
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x09>;
 		reg-io-width = <0x04>;
 		rockchip,grf = <&{/syscon@fdc60000}>;
@@ -1432,6 +1454,7 @@
 	pcie@fe260000 {
 		compatible = "rockchip,rk3568-pcie";
 		reset-gpios = <0x56 0x11 0x00>;
+		disable-gpios = <&{/pinctrl/gpio@fe760000} 0x12 0x00>;
 		phandle = <0x119>;
 
 		vpcie3v3-supply = <&{/minipcie-regulator}>;
@@ -1446,12 +1469,12 @@
 		device_type = "pci";
 		#interrupt-cells = <0x01>;
 		interrupt-map-mask = <0x00 0x00 0x00 0x07>;
-		interrupt-map = <0x00 0x00 0x00 0x01 0x6b 0x00 0x00 0x00 0x00 0x02 0x6b 0x01 0x00 0x00 0x00 0x03 0x6b 0x02 0x00 0x00 0x00 0x04 0x6b 0x03>;
+		interrupt-map = <0x00 0x00 0x00 0x01 0x64 0x00 0x00 0x00 0x00 0x02 0x64 0x01 0x00 0x00 0x00 0x03 0x64 0x02 0x00 0x00 0x00 0x04 0x64 0x03>;
 		linux,pci-domain = <0x00>;
 		num-ib-windows = <0x06>;
 		num-ob-windows = <0x02>;
 		max-link-speed = <0x02>;
-		msi-map = <0x00 0x6c 0x00 0x1000>;
+		msi-map = <0x00 0x65 0x00 0x1000>;
 		num-lanes = <0x01>;
 		phys = <&{/phy@fe840000} 0x02>;
 		phy-names = "pcie-phy";
@@ -1531,7 +1554,7 @@
 		assigned-clocks = <&{/clock-controller@fdd20000} 0x7b &{/clock-controller@fdd20000} 0x7d &{/clock-controller@fdd20000} 0x7c>;
 		bus-width = <0x08>;
 		assigned-clock-rates = <0xbebc200 0x16e3600 0xbebc200>;
-		resets = <&{/clock-controller@fdd20000} 0x78 0x24 0x76 0x24 0x75 0x24 0x77 0x24 0x79>;
+		resets = <&{/clock-controller@fdd20000} 0x78 &{/clock-controller@fdd20000} 0x76 &{/clock-controller@fdd20000} 0x75 &{/clock-controller@fdd20000} 0x77 &{/clock-controller@fdd20000} 0x79>;
 		interrupts = <0x00 0x13 0x04>;
 		clocks = <&{/clock-controller@fdd20000} 0x7c &{/clock-controller@fdd20000} 0x7a &{/clock-controller@fdd20000} 0x79 &{/clock-controller@fdd20000} 0x7b &{/clock-controller@fdd20000} 0x7d>;
 		status = "okay";
@@ -1594,6 +1617,69 @@
 				phandle = <0x125>;
 			};
 
+
+			core-pvtm@2a {
+				reg = <0x2a 0x02>;
+				phandle = <0x300>;
+			};
+			mbist-vmin@9 {
+				bits = <0x00 0x04>;
+				reg = <0x09 0x01>;
+				phandle = <0x301>;
+			};
+			specification-serial-number@7 {
+				bits = <0x00 0x05>;
+				reg = <0x07 0x01>;
+				phandle = <0x302>;
+			};
+			remark-spec-serial-number@56 {
+				bits = <0x00 0x05>;
+				reg = <0x56 0x01>;
+				phandle = <0x303>;
+			};
+			cpu-opp-info@36 {
+				reg = <0x36 0x06>;
+				phandle = <0x304>;
+			};
+			gpu-opp-info@3c {
+				reg = <0x3c 0x06>;
+				phandle = <0x305>;
+			};
+			npu-opp-info@42 {
+				reg = <0x42 0x06>;
+				phandle = <0x306>;
+			};
+			dmc-opp-info@48 {
+				reg = <0x48 0x06>;
+				phandle = <0x307>;
+			};
+			tsadc-trim-base@32 {
+				reg = <0x32 0x01>;
+				phandle = <0x308>;
+			};
+			tsadc-trim-base-frac@31 {
+				bits = <0x04 0x04>;
+				reg = <0x31 0x01>;
+				phandle = <0x309>;
+			};
+			cpu-tsadc-trim-h@2f {
+				bits = <0x00 0x04>;
+				reg = <0x2f 0x01>;
+				phandle = <0x30a>;
+			};
+			cpu-tsadc-trim-l@2e {
+				reg = <0x2e 0x01>;
+				phandle = <0x30b>;
+			};
+			npu-tsadc-trim-h@31 {
+				bits = <0x00 0x04>;
+				reg = <0x31 0x01>;
+				phandle = <0x30c>;
+			};
+			npu-tsadc-trim-l@30 {
+				reg = <0x30 0x01>;
+				phandle = <0x30d>;
+			};
 			gpu-leakage@1d {
 				reg = <0x1d 0x01>;
 				phandle = <0x126>;
@@ -1798,6 +1884,15 @@
 		#size-cells = <0x00>;
 		status = "okay";
 		phandle = <0x130>;
+
+		hym8563@51 {
+			compatible = "haoyu,hym8563";
+			reg = <0x51>;
+			#clock-cells = <0x00>;
+			clock-frequency = <0x8000>;
+			clock-output-names = "hym8563";
+			rtc-irq-gpio = <&{/pinctrl/gpio@fdd60000} 0x1b 0x02>;
+		};
 	};
 
 	watchdog@fe600000 {
@@ -2012,7 +2107,7 @@
 	thermal-zones {
 		phandle = <0x13f>;
 
-		cpu-thermal {
+		soc-thermal {
 			polling-delay-passive = <0x64>;
 			polling-delay = <0x3e8>;
 			thermal-sensors = <0xa3 0x00>;
@@ -4838,6 +4933,30 @@
 				phandle = <0xe1>;
 			};
 		};
+
+		sdio-pwrseq {
+
+			wifi-enable-h {
+				rockchip,pins = <0x03 0x1d 0x00 0x129>;
+				phandle = <0x320>;
+			};
+		};
+
+		wireless-wlan {
+
+			wifi-host-wake-irq {
+				rockchip,pins = <0x03 0x1c 0x00 0x130>;
+				phandle = <0x321>;
+			};
+		};
+
+		headphone {
+
+			hp-det {
+				rockchip,pins = <0x01 0x1b 0x00 0x129>;
+				phandle = <0x322>;
+			};
+		};
 	};
 
 	opp-table-0 {
@@ -4979,14 +5098,14 @@
 		data-lanes = <0x01 0x02>;
 		phandle = <0xc8>;
 	
-		status = "disabled";
+		status = "okay";
 		clock-names = "refclk_m", "refclk_n", "pclk";
 		resets = <&{/clock-controller@fdd20000} 0x1be>;
 		clocks = <&{/clock-controller@fdd00000} 0x26 &{/clock-controller@fdd00000} 0x27 &{/clock-controller@fdd20000} 0x177>;
 		#phy-cells = <0x00>;
 		reg = <0x00 0xfe8c0000 0x00 0x20000>;
 		reset-names = "phy";
-		rockchip,phy-grf = <0x126>;};
+		rockchip,phy-grf = <&{/syscon@fdcb8000}>;};
 
 	pcie@fe270000 {
 		compatible = "rockchip,rk3568-pcie";
@@ -5078,6 +5197,7 @@
 		assigned-clock-rates = <0x00 0x7735940>;
 		clock_in_out = "output";
 		phy-mode = "rgmii";
+		local-mac-address = [9a e7 fa 63 d2 ce];
 		pinctrl-0 = <0xcf 0xd0 0xd1 0xd2 0xd3>;
 		snps,reset-gpio = <&{/pinctrl/gpio@fe750000} 0x1b 0x01>;
 		snps,reset-active-low;
@@ -5106,6 +5226,29 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			phandle = <0x27f>;
+
+			/* ---- MDIO warm-up placeholder ----
+			 * ROOT CAUSE: stmmac_mdio_reset() performs a dummy MDIO read
+			 * after the PHY reset so the PHY sees one MDC clock and finishes
+			 * its reset. That read is skipped when core_type == GMAC4,
+			 * and RK3568 IS GMAC4. So after snps,reset-gpio releases the PHY,
+			 * MDC stays idle and the PHY never completes reset; the FIRST
+			 * frame of of_mdio's scan (PHYID1) then goes unanswered and reads
+			 * back as 0xffff, yielding phy_id = 0xffff4411 instead of the
+			 * real 0x7b744411. maxio (mask 0x7fffffff) never matches, the
+			 * Generic PHY binds instead, Maxio's private page writes never
+			 * happen, and the MAC dies with 'DMA engine initialization failed'.
+			 *
+			 * This node sits BEFORE the real PHY so it is scanned first. That
+			 * transaction is doomed (-ENODEV: no PHY at address 1) but it
+			 * clocks MDC, letting the real PHY finish its reset; the following
+			 * phy@0 read then returns the correct ID. of_mdio.c only logs
+			 * -ENODEV as "missing" and continues, so registration is safe.
+			 */
+			ethernet-phy@1 {
+				reg = <0x01>;
+				compatible = "ethernet-phy-ieee802.3-c22";
+			};
 
 			ethernet-phy@0 {
 				reg = <0x00>;
@@ -5189,7 +5332,7 @@
 		clock-names = "refclk", "apbclk", "pipe_clk";
 		assigned-clocks = <&{/clock-controller@fdd00000} 0x1f>;
 		assigned-clock-rates = <0x5f5e100>;
-		resets = <&{/clock-controller@fdd20000} 0x1c4 0x24 0x1c5>;
+		resets = <&{/clock-controller@fdd20000} 0x1c4 &{/clock-controller@fdd20000} 0x1c5>;
 		clocks = <&{/clock-controller@fdd00000} 0x1f &{/clock-controller@fdd20000} 0x17c &{/clock-controller@fdd20000} 0x7f>;
 		#phy-cells = <0x01>;
 		rockchip,pipe-phy-grf = <&{/syscon@fdc70000}>;
@@ -5413,7 +5556,6 @@
 		rga = "/rga@fdeb0000";
 		vepu = "/video-codec@fdee0000";
 		vepu_mmu = "/iommu@fdee0800";
-		vdec = "/video-codec@fdf80100";
 		vdec_mmu = "/iommu@fdf80800";
 		vicap = "/video-capture@fdfe0000";
 		vicap_dvp = "/video-capture@fdfe0000/ports/port@0";
@@ -5512,10 +5654,10 @@
 		uart8 = "/serial@fe6c0000";
 		uart9 = "/serial@fe6d0000";
 		thermal_zones = "/thermal-zones";
-		cpu_thermal = "/thermal-zones/cpu-thermal";
-		cpu_alert0 = "/thermal-zones/cpu-thermal/trips/cpu_alert0";
-		cpu_alert1 = "/thermal-zones/cpu-thermal/trips/cpu_alert1";
-		cpu_crit = "/thermal-zones/cpu-thermal/trips/cpu_crit";
+		cpu_thermal = "/thermal-zones/soc-thermal";
+		cpu_alert0 = "/thermal-zones/soc-thermal/trips/cpu_alert0";
+		cpu_alert1 = "/thermal-zones/soc-thermal/trips/cpu_alert1";
+		cpu_crit = "/thermal-zones/soc-thermal/trips/cpu_crit";
 		gpu_thermal = "/thermal-zones/gpu-thermal";
 		gpu_threshold = "/thermal-zones/gpu-thermal/trips/gpu-threshold";
 		gpu_target = "/thermal-zones/gpu-thermal/trips/gpu-target";
@@ -6099,6 +6241,7 @@
 	operating-points-v2 = <&{/bus-npu-opp-table}>;
 	pvtm-supply = <&{/i2c@fdd40000/regulator@1c}>;};
 	bus-npu-opp-table {
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/core-pvtm@2a}>;
 	rockchip,pvtm-ch = <0x00 0x05>;
 	opp-shared;
 	compatible = "operating-points-v2";
@@ -6126,7 +6269,7 @@
 	cpu0-opp-table {
 	rockchip,pvtm-sample-time = <0x3e8>;
 	rockchip,pvtm-ch = <0x00 0x05>;
-	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/cpu-leakage@1a} 0x07 &{/power-management@fdd90000/power-controller/power-domain@9} 0x09 &{/power-management@fdd90000/power-controller/power-domain@7} 0x0b>;
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/cpu-leakage@1a} &{/efuse@fe38c000/nvmem-layout/core-pvtm@2a} &{/efuse@fe38c000/nvmem-layout/mbist-vmin@9} &{/efuse@fe38c000/nvmem-layout/cpu-opp-info@36} &{/efuse@fe38c000/nvmem-layout/specification-serial-number@7} &{/efuse@fe38c000/nvmem-layout/remark-spec-serial-number@56}>;
 	rockchip,pvtm-number = <0x0a>;
 	rockchip,low-temp = <0x00>;
 	opp-shared;
@@ -6294,7 +6437,7 @@
 	power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
 	iommus = <&{/iommu@fdef0800}>;
 	clock-names = "aclk", "hclk", "sclk";
-	resets = <&{/clock-controller@fdd20000} 0x127 0x24 0x128 0x24 0x129>;
+	resets = <&{/clock-controller@fdd20000} 0x127 &{/clock-controller@fdd20000} 0x128 &{/clock-controller@fdd20000} 0x129>;
 	interrupts = <0x00 0x38 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0xf6 &{/clock-controller@fdd20000} 0xf7 &{/clock-controller@fdd20000} 0xf8>;
 	rockchip,srv = <&{/mpp-srv}>;
@@ -6368,7 +6511,7 @@
 	power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
 	iommus = <&{/iommu@fded0480}>;
 	clock-names = "aclk_vcodec", "hclk_vcodec";
-	resets = <&{/clock-controller@fdd20000} 0x12c 0x24 0x12d>;
+	resets = <&{/clock-controller@fdd20000} 0x12c &{/clock-controller@fdd20000} 0x12d>;
 	interrupts = <0x00 0x3e 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0xfb &{/clock-controller@fdd20000} 0xfc>;
 	rockchip,srv = <&{/mpp-srv}>;
@@ -6601,7 +6744,7 @@
 	};
 	npu-opp-table {
 	rockchip,pvtm-ch = <0x00 0x05>;
-	nvmem-cells = <&{/i2c@fdd40000/regulator@1c} 0x07 &{/power-management@fdd90000/power-controller/power-domain@9} 0x6d &{/power-management@fdd90000/power-controller/power-domain@7} 0x0b>;
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/npu-leakage@1c} &{/efuse@fe38c000/nvmem-layout/core-pvtm@2a} &{/efuse@fe38c000/nvmem-layout/mbist-vmin@9} &{/efuse@fe38c000/nvmem-layout/npu-opp-info@42} &{/efuse@fe38c000/nvmem-layout/specification-serial-number@7} &{/efuse@fe38c000/nvmem-layout/remark-spec-serial-number@56}>;
 	rockchip,low-temp = <0x00>;
 	rockchip,max-volt = <0xf4240>;
 	rockchip,low-temp-adjust-volt = <0x00 0x3e8 0xc350>;
@@ -6689,7 +6832,7 @@
 	assigned-clocks = <&{/clock-controller@fdd20000} 0x23>;
 	rknpu-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG4}>;
 	assigned-clock-rates = <0x23c34600>;
-	resets = <&{/clock-controller@fdd20000} 0x2b 0x24 0x2c>;
+	resets = <&{/clock-controller@fdd20000} 0x2b &{/clock-controller@fdd20000} 0x2c>;
 	interrupts = <0x00 0x97 0x04>;
 	clocks = <&{/firmware/scmi/protocol@14} 0x02 &{/clock-controller@fdd20000} 0x23 &{/clock-controller@fdd20000} 0x28 &{/clock-controller@fdd20000} 0x29>;
 	reg = <0x00 0xfde40000 0x00 0x10000>;
@@ -6697,7 +6840,7 @@
 	operating-points-v2 = <&{/npu-opp-table}>;};
 	opp-table2 {
 	rockchip,pvtm-ch = <0x00 0x05>;
-	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/gpu-leakage@1d} 0x07 &{/power-management@fdd90000/power-controller/power-domain@9} 0x73 &{/power-management@fdd90000/power-controller/power-domain@7} 0x0b>;
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/gpu-leakage@1d} &{/efuse@fe38c000/nvmem-layout/core-pvtm@2a} &{/efuse@fe38c000/nvmem-layout/mbist-vmin@9} &{/efuse@fe38c000/nvmem-layout/gpu-opp-info@3c} &{/efuse@fe38c000/nvmem-layout/specification-serial-number@7} &{/efuse@fe38c000/nvmem-layout/remark-spec-serial-number@56}>;
 	rockchip,low-temp = <0x00>;
 	rockchip,max-volt = <0xf4240>;
 	rockchip,low-temp-adjust-volt = <0x00 0x320 0xc350>;
@@ -6768,7 +6911,7 @@
 	pvtm@0 {
 	clock-names = "clk", "pclk";
 	thermal-zone = "soc-thermal";
-	resets = <&{/clock-controller@fdd20000} 0x1a 0x24 0x19>;
+	resets = <&{/clock-controller@fdd20000} 0x1a &{/clock-controller@fdd20000} 0x19>;
 	clocks = <&{/clock-controller@fdd20000} 0x13 &{/clock-controller@fdd20000} 0x1c2>;
 	reg = <0x00>;
 	reset-names = "rts", "rst-p";
@@ -6782,7 +6925,7 @@
 	pvtm@1 {
 	clock-names = "clk", "pclk";
 	thermal-zone = "gpu-thermal";
-	resets = <&{/clock-controller@fdd20000} 0x24 0x24 0x23>;
+	resets = <&{/clock-controller@fdd20000} 0x24 &{/clock-controller@fdd20000} 0x23>;
 	clocks = <&{/clock-controller@fdd20000} 0x1e &{/clock-controller@fdd20000} 0x1d>;
 	reg = <0x01>;
 	reset-names = "rts", "rst-p";
@@ -6796,7 +6939,7 @@
 	pvtm@2 {
 	clock-names = "clk", "pclk", "hclk";
 	thermal-zone = "soc-thermal";
-	resets = <&{/clock-controller@fdd20000} 0x2e 0x24 0x2d>;
+	resets = <&{/clock-controller@fdd20000} 0x2e &{/clock-controller@fdd20000} 0x2d>;
 	clocks = <&{/clock-controller@fdd20000} 0x2b &{/clock-controller@fdd20000} 0x2a &{/clock-controller@fdd20000} 0x25>;
 	reg = <0x02>;
 	reset-names = "rts", "rst-p";
@@ -6804,21 +6947,22 @@
 	};
 	rk809-sound {
 	pinctrl-names = "default";
-	rockchip,cpu = <0xdf>;
+	pinctrl-0 = <&{/pinctrl/headphone/hp-det}>;
+	rockchip,cpu = <&{/i2s@fe410000}>;
 	spk-volume = <0x1e>;
-	rockchip,codec = <0x137>;
-	hp-det-gpio = <0xeb 0x1b 0x00>;
+	rockchip,codec = <&{/i2c@fdd40000/pmic@20/codec}>;
+	hp-det-gpio = <&{/pinctrl/gpio@fe740000} 0x1b 0x00>;
 	rockchip,card-name = "rockchip-rk809";
 	rockchip,format = "i2s";
 	hp-volume = <0x14>;
 	compatible = "rockchip,multicodecs-card";
 	status = "okay";
-	spk-det-gpio = <0x46 0x16 0x01>;
+	spk-det-gpio = <&{/pinctrl/gpio@fe770000} 0x16 0x01>;
 	rockchip,mclk-fs = <0x100>;
 	};
 	rkvdec-opp-table {
 	rockchip,pvtm-ch = <0x00 0x05>;
-	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/log-leakage@1b} 0x07>;
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/log-leakage@1b} &{/efuse@fe38c000/nvmem-layout/core-pvtm@2a}>;
 	rockchip,leakage-voltage-sel = <0x01 0x50 0x00 0x51 0xfe 0x01>;
 	compatible = "operating-points-v2";
 	nvmem-cell-names = "leakage", "pvtm";
@@ -6847,7 +6991,7 @@
 	rockchip,task-capacity = <0x10>;
 	rockchip,normal-rates = <0x11b3dc40 0x00 0x11b3dc40 0x11b3dc40 0x23c34600>;
 	assigned-clock-rates = <0x11b3dc40 0x11b3dc40 0x11b3dc40 0x11b3dc40>;
-	resets = <&{/clock-controller@fdd20000} 0x142 0x24 0x143 0x24 0x144 0x24 0x145 0x24 0x146>;
+	resets = <&{/clock-controller@fdd20000} 0x142 &{/clock-controller@fdd20000} 0x143 &{/clock-controller@fdd20000} 0x144 &{/clock-controller@fdd20000} 0x145 &{/clock-controller@fdd20000} 0x146>;
 	interrupts = <0x00 0x5b 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0x108 &{/clock-controller@fdd20000} 0x109 &{/clock-controller@fdd20000} 0x10a &{/clock-controller@fdd20000} 0x10b &{/clock-controller@fdd20000} 0x10c>;
 	rockchip,rcb-min-width = <0x200>;
@@ -6860,10 +7004,11 @@
 	reset-names = "video_a", "video_h", "video_cabac", "video_core", "video_hevc_cabac";
 	operating-points-v2 = <&{/rkvdec-opp-table}>;
 	vdec-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG1}>;
-	rockchip,sram = <0x7e>;
+	rockchip,sram = <&{/sram@fdcc0000/rkvdec-sram@0}>;
 	rockchip,default-max-load = <0x1fe000>;};
 	rkvenc-opp-table {
 	rockchip,pvtm-ch = <0x00 0x05>;
+	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/core-pvtm@2a}>;
 	compatible = "operating-points-v2";
 	nvmem-cell-names = "pvtm";
 	rockchip,pvtm-voltage-sel = <0x00 0x14820 0x00 0x14821 0x16378 0x01 0x16379 0x186a0 0x02>;
@@ -6893,7 +7038,7 @@
 	venc-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG1}>;
 	rockchip,normal-rates = <0x11b3dc40 0x00 0x11b3dc40>;
 	assigned-clock-rates = <0x11b3dc40 0x11b3dc40>;
-	resets = <&{/clock-controller@fdd20000} 0x133 0x24 0x134 0x24 0x135>;
+	resets = <&{/clock-controller@fdd20000} 0x133 &{/clock-controller@fdd20000} 0x134 &{/clock-controller@fdd20000} 0x135>;
 	interrupts = <0x00 0x8c 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0x103 &{/clock-controller@fdd20000} 0x104 &{/clock-controller@fdd20000} 0x105>;
 	node-name = "rkvenc";
@@ -6910,6 +7055,7 @@
 	};
 	sdio-pwrseq {
 	pinctrl-names = "default";
+	pinctrl-0 = <&{/pinctrl/sdio-pwrseq/wifi-enable-h}>;
 	clock-names = "ext_clock";
 	clocks = <&{/i2c@fdd40000/pmic@20} 0x01>;
 	compatible = "mmc-pwrseq-simple";
@@ -6954,7 +7100,8 @@
 	resets = <&{/clock-controller@fdd20000} 0x94>;
 	interrupts = <0x00 0xa9 0x04>;
 	snps,dis_rxdet_inp3_quirk;
-	extcon = <0x2a>;
+	extcon = <&{/usb2phy@fe8a0000}>;
+	phys = <&{/usb2phy@fe8a0000/otg-port}>;
 	snps,dis-u2-entry-quirk;
 	compatible = "snps,dwc3";
 	snps,parkmode-disable-hs-quirk;
@@ -6981,6 +7128,7 @@
 	power-domains = <&{/power-management@fdd90000/power-controller} 0x0f>;
 	snps,dis_enblslpm_quirk;
 	phy-names = "usb2-phy", "usb3-phy";
+	phys = <&{/usb2phy@fe8a0000/host-port} &{/phy@fe830000} 0x04>;
 	snps,dis-u2-freeclk-exists-quirk;
 	phy_type = "utmi_wide";
 	resets = <&{/clock-controller@fdd20000} 0x95>;
@@ -7042,22 +7190,23 @@
 	pinctrl-names = "default", "rts_gpio";
 	pinctrl-0 = <&{/pinctrl/uart8/uart8m0-rtsn}>;
 	clock-names = "ext_clock";
-	BT,power_gpio = <0x8b 0x00 0x00>;
+	BT,power_gpio = <&{/pinctrl/gpio@fe760000} 0x00 0x00>;
 	clocks = <&{/i2c@fdd40000/pmic@20} 0x01>;
-	BT,wake_gpio = <0x8b 0x01 0x00>;
-	uart_rts_gpios = <0xbb 0x09 0x01>;
+	BT,wake_gpio = <&{/pinctrl/gpio@fe760000} 0x01 0x00>;
+	uart_rts_gpios = <&{/pinctrl/gpio@fe750000} 0x09 0x01>;
 	compatible = "bluetooth-platdata";
-	BT,wake_host_irq = <0x8b 0x02 0x00>;
+	BT,wake_host_irq = <&{/pinctrl/gpio@fe760000} 0x02 0x00>;
 	status = "okay";
 	};
 	wireless-wlan {
 	pinctrl-names = "default";
-	WIFI,host_wake_irq = <0x8b 0x1c 0x00>;
+	pinctrl-0 = <&{/pinctrl/wireless-wlan/wifi-host-wake-irq}>;
+	WIFI,host_wake_irq = <&{/pinctrl/gpio@fe760000} 0x1c 0x00>;
 	wifi_chip_type = "rtl8822cs";
 	compatible = "wlan-platdata";
 	status = "okay";
 	rockchip,grf = <&{/syscon@fdc60000}>;
-	WIFI,poweren_gpio = <0x8b 0x1d 0x00>;
+	WIFI,poweren_gpio = <&{/pinctrl/gpio@fe760000} 0x1d 0x00>;
 	};
 	xpcs-gmac0-clock {
 	clock-output-names = "clk_gmac0_xpcs_mii";

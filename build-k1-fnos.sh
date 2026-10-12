@@ -221,21 +221,34 @@ if [[ -n "$MODULES_DIR" && -d "$MODULES_DIR" ]]; then
     # 开机自动加载（网络依赖 PHY 驱动先就位）
     mkdir -p "$ROOT_MNT/etc/modules-load.d"
     cat > "$ROOT_MNT/etc/modules-load.d/kickpi-k1.conf" <<EOF
-# KICKPI K1 板级模块：Maxio PHY 必须先于 dwmac 就位，否则网口会绑到通用 PHY
+# KICKPI K1 板级网络模块：开机【显式】加载，绝不依赖 udev 自动加载。
+#   maxio     Maxio MAE0621A PHY 驱动，必须先于 MAC 驱动注册
+#   stmmac    GMAC 公共层
+#   dwmac_rk  两个 GMAC 的平台驱动。本内核 CONFIG_DWMAC_ROCKCHIP=m：
+#             不加载 → 不 probe → 不输出 RGMII 参考时钟(clock_in_out="output")
+#             → PHY 无时钟 → 链路灯全灭、两口起不来（实机症状）。
+# 顺序由本文件逐行执行 + modprobe.d 的 softdep 双重保证。
 maxio
+stmmac
+dwmac_rk
 EOF
-    # 真正的「PHY 先于 MAC」保障：dwmac_rk 是模块，由 udev 按
-    # of:N*T*Crockchip,rk3568-gmac 别名在 ~10s 冷插拔加载（不在任何 modules-load 清单里），
-    # 只有 modprobe.d 的 softdep 能保证 modprobe dwmac_rk 时先拉起 maxio。
+    # 顺序的第二重保障：modprobe 走 softdep，保证 maxio 先于 stmmac/dwmac_rk 注册。
     # 否则 netdev 首次 up 时 phy_attach_direct() 先绑 Generic PHY，晚到的 maxio 被
     # __device_attach 跳过 → 必须 ifdown/ifup 才可能换绑（取证 A1 的 driver-core 依据）。
+    # （历史教训：此前只放 maxio、把 dwmac_rk 完全交给 udev 冷插拔，实机就是开机不加载。）
     mkdir -p "$ROOT_MNT/etc/modprobe.d"
     cat > "$ROOT_MNT/etc/modprobe.d/kickpi-k1.conf" <<'SOFTEOF'
 # KICKPI K1: Maxio MAE0621A PHY 驱动必须先于 stmmac/dwmac 注册
 softdep dwmac_rk pre: maxio
 softdep stmmac pre: maxio
+# KICKPI K1: WiFi/BT 有符号依赖，modprobe 必须先拉公共层
+#   swt6621s_wifi 未定义 cfg80211_* / rfkill_* → 不先装 cfg80211+rfkill 就是 err -2
+#   skwbt        未定义 hci_*                → 不先装 bluetooth+rfkill 就是符号缺失
+# （modules.dep 已由 depmod -b 正确生成，softdep 是 insmod 路径的第二重保险）
+softdep swt6621s_wifi pre: cfg80211 rfkill
+softdep skwbt pre: bluetooth rfkill
 SOFTEOF
-    echo "  ✓ modprobe.d softdep（maxio 先于 dwmac_rk/stmmac）"
+    echo "  ✓ modprobe.d softdep（maxio 先于 dwmac_rk/stmmac；cfg80211/rfkill 先于 swt6621s_wifi；bluetooth/rfkill 先于 skwbt）"
     # 不依赖 depmod 的保险：用一个 systemd oneshot 按【绝对路径】insmod。
     # 理由：depmod 需要在 chroot 里跑 arm64 二进制（要 qemu/binfmt）；
     #       万一环境不具备，这套按路径加载仍然有效。
@@ -255,11 +268,30 @@ SOFTEOF
       # ExecStart 在【构建期】就展开成逐个 insmod 的字面命令：内层 sh 不再有 $ 变量，
       # 既不会被本脚本 set -u 判 "m: unbound variable"，也不会被 systemd 变量展开吃掉路径。
       CMD=""
-      for m in maxio swt6621s_wifi skw_sdio_lite skwbt; do
+      # 无外部依赖的模块继续用【绝对路径 insmod】：不依赖 depmod，也不受
+      # modules.dep 是否刷新影响（maxio/skw_sdio_lite 的 modules.dep 依赖为空）。
+      for m in maxio skw_sdio_lite; do
         [[ -n "$CMD" ]] && CMD="$CMD; "
-        CMD="$CMD/sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/$m.ko || echo 'insmod failed: $m (vermagic/path?)'"
+        # 提示语不能含引号/空格/括号：它们会破坏 ExecStart 的引号嵌套，
+        # 导致 sh -c 只拿到第一个命令、后面全被当成位置参数（实测 argv 会裂成 15 项，
+        # 结果只有第一条 insmod 真正执行）。
+        CMD="$CMD/sbin/insmod /usr/lib/modules/$KREL/updates/kickpi-k1/$m.ko || echo insmod-failed:$m"
       done
-      echo "ExecStart=/bin/sh -c '$CMD'"
+      # 有符号依赖的模块必须走 modprobe：insmod 不解析依赖 → 必然符号缺失。
+      #   swt6621s_wifi 依赖 cfg80211 + rfkill（实机：57 个 cfg80211_* err -2）
+      #   skwbt        依赖 bluetooth + rfkill（实机：5 个 hci_* 缺失）
+      # modules.dep 已由 depmod -b 生成正确依赖链，modprobe 会先拉公共层；
+      # modprobe.d 的 softdep 是第二重保障。
+      CMD="$CMD; /sbin/modprobe swt6621s_wifi || echo modprobe-failed:swt6621s_wifi"
+      CMD="$CMD; /sbin/modprobe skwbt || echo modprobe-failed:skwbt"
+      # 两个 GMAC 的 MAC 驱动：本内核 =m，必须由本单元【确定性】拉起，不能只等 udev
+      # 冷插拔（实机症状：开机不加载 → 不输出 RGMII 参考时钟 → PHY 无时钟 → 灯全灭）。
+      # 用 modprobe 而不是 insmod：dwmac_rk 依赖 pcs_xpcs/stmmac/stmmac-platform，
+      # insmod 不解析依赖会直接失败；modprobe 同时会按 softdep 保证 maxio 已先行注册。
+      CMD="$CMD; /sbin/modprobe stmmac || echo modprobe-failed:stmmac"
+      CMD="$CMD; /sbin/modprobe dwmac_rk || echo modprobe-failed:dwmac_rk"
+      # 外层用双引号，内层零引号 → sh -c 恰好拿到 3 个 argv（sh/-c/完整脚本）
+      echo "ExecStart=/bin/sh -c \"$CMD\""
       echo ""
       echo "[Install]"
       echo "WantedBy=sysinit.target"
@@ -369,18 +401,25 @@ WRAP
     mkdir -p "$OSFIX/etc/systemd/system/timers.target.wants"
     ln -sf ../k1-collect-logs.timer "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer"
 
-    # (2) modules-load 清单里去掉本内核没有的模块
+    # (2) modules-load 清单里去掉本内核加载不了的模块
     #     msr = x86 专用；md_mod = 本内核无此模块 → 都会让 systemd-modules-load.service 失败
-    #     rga3 = 实机上 systemd-modules-load 每次开机 'Bad address'（该内核 rga3 初始化
-    #     在本板环境返回 EFAULT），把整机 --failed 顶红；rga3 有 OF 匹配表，仍会由 udev
-    #     冷插拔按 compatible 别名加载，特性不受影响。
+    #     rga3 = 实机 8 次开机采集（16 个日志文件）一致：finit_module 返回 EFAULT（'Bad address'）。根因不是
+    #     vermagic/符号（vermagic=6.18.18.c951-trim、modprobe --show-depends 解析通过、模块
+    #     能跑到 init 里才失败），而是 init 调 rga_iommu_bind() 时先打印
+    #     'rga_iommu: rga_iommu_bind, binding map scheduler failed!'、再打印
+    #     'rga: rga iommu bind failed!'，最后返回 -14 (EFAULT) → systemd-modules-load
+    #     每开机 FAILED，把整机 --failed 顶红。
+    #     ⚠ 更正旧说法：rga3.ko 没有任何 MODULE_DEVICE_TABLE 别名（全树 3656 条 'alias of:'
+    #     都来自别的模块、rga 相关 0 条），所以 udev **不会**按 compatible 自动加载它；
+    #     改 DTS 的 compatible 也不会让它加载。要用 RGA 必须先在实机修好 rga_iommu_bind
+    #     的 EFAULT（DT 侧 rga@fdeb0000 已 okay），验证能插再把 rga3 放回本清单，别硬来。
     for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod" "trim-rk_vcodec.conf:rga3"; do
         f="${pair%%:*}"; m="${pair##*:}"
         p="$OSFIX/etc/modules-load.d/$f"
         if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
             cp -f "$p" "$p.orig-fnnas"
             sed -i "/^${m}$/d" "$p"
-            echo "  ✓ 移除 $f 里本内核不存在的模块 $m"
+            echo "  ✓ 移除 $f 里本内核加载不了的模块 $m"
         fi
     done
 
@@ -440,7 +479,27 @@ WRAP
             fail "$f 仍含本内核跑不了的模块 $m（会让 systemd-modules-load 开机失败）"
         fi
     done
-    grep -qs '^maxio$' "$OSFIX/etc/modules-load.d/kickpi-k1.conf" || fail "kickpi-k1.conf 缺 maxio"
+    # 网口门禁：MAC/PHY 驱动必须【全部】显式列入开机清单。
+    # 只放 maxio 是历史 bug —— dwmac_rk 一旦交给 udev 自动加载，实机就是开机不加载、
+    # 灯全灭。这里逐个断言，缺一个即构建失败。
+    for _m in maxio stmmac dwmac_rk; do
+        grep -qs "^${_m}\$" "$OSFIX/etc/modules-load.d/kickpi-k1.conf" \
+            || fail "kickpi-k1.conf 缺 $_m（MAC/PHY 驱动未显式开机加载 → 网口起不来、灯不亮）"
+    done
+    # 顺序门禁：maxio 必须排在 stmmac/dwmac_rk 之前
+    [[ "$(grep -v '^#' "$OSFIX/etc/modules-load.d/kickpi-k1.conf" | grep -v '^$' | head -1)" == "maxio" ]] \
+        || fail "kickpi-k1.conf 首个模块不是 maxio（PHY 必须先于 MAC 注册）"
+    # 第二道保险：绝对路径单元也必须确定性拉起 dwmac_rk
+    grep -qs 'modprobe dwmac_rk' "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" \
+        || fail "kickpi-k1-modules.service 未用 modprobe 拉起 dwmac_rk"
+    # 引号门禁：ExecStart 必须分词成恰好 3 项（sh / -c / 完整脚本）。
+    # 引号嵌套一旦被破坏（提示语里出现引号/空格/括号），sh -c 只会执行第一条命令，
+    # 后面所有 insmod/modprobe 全被当成位置参数静默丢弃 —— 网口驱动就永远加载不上。
+    if command -v python3 >/dev/null 2>&1; then
+        _es="$(grep '^ExecStart=' "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" | sed 's/^ExecStart=//')"
+        _n="$(python3 -c 'import shlex,sys; print(len(shlex.split(sys.argv[1])))' "$_es" 2>/dev/null || echo 0)"
+        [[ "$_n" == "3" ]] || fail "kickpi-k1-modules.service ExecStart 分词成 $_n 项（应为 3）→ sh -c 只会跑第一条命令"
+    fi
     [[ -f "$OSFIX/etc/modprobe.d/kickpi-k1.conf" ]] || fail "缺 modprobe.d softdep（maxio 先于 dwmac_rk）"
     echo "  ✓ OS 层修复已固化（日志收集 / 模块清单 / 服务 mask / 内核日志级别）"
 

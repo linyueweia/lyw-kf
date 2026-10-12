@@ -420,12 +420,26 @@ static struct phy_driver maxio_nc_drvs[] = {
 		.resume = maxio_mae0621aq3ci_resume,
 		.remove = maxio_mae0621a_remove,
 	},
+{
+		.phy_id = 0xffff4411,
+		.phy_id_mask = 0x7fffffff,
+		.name = "MAE0621A-Q2C Gigabit Ethernet (MDIO warm-up id)",
+		.features = PHY_GBIT_FEATURES,
+		.probe = maxio_mae0621a_probe,
+		.config_init	= maxio_mae0621a_config_init,
+		.config_aneg = &genphy_config_aneg,
+		.read_status = maxio_mae0621a_status,
+		.suspend = maxio_mae0621a_suspend,
+		.resume = maxio_mae0621a_resume,
+		.remove = maxio_mae0621a_remove,
+	}
 };
 
 module_phy_driver(maxio_nc_drvs);
 static struct mdio_device_id __maybe_unused maxio_nc_tbl[] = {
 	{ 0x7b744411, 0x7fffffff },
 	{ 0x7b744412, 0x7fffffff },
+{ 0xffff4411, 0xffffffff },
 	{ }
 };
 
