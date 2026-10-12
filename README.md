@@ -31,11 +31,11 @@ K1 的双千兆网口用的是 **Maxio MAE0621A** PHY（PHY ID `0x7b744411`）�
 
 ```
 dts/rk3568-kickpi-k1.dts        板级设备树源（自包含展开式，无 #include）
-dist/rk3568-kickpi-k1.dtb       预编译 DTB（sha256 c53d9896…）
-tools/merge-dtb.py              可复现的合并脚本（飞牛 6.18 原生 R5S 骨架 + K1 板级覆盖，幂等）
+dist/rk3568-kickpi-k1.dtb       预编译 DTB（改 dts 后必须用门禁同款 dtc 参数重编同步）
 
 modules/src/{maxio.c,BUILD-RECIPE.md}   Maxio PHY 驱动源 + 构建配方
-modules/swt6621s/               SWT6621S WiFi/BT 三模块的树外源（补丁见 patches/）
+（SWT6621S 树外源不入库：装配时 git clone retro98boy/seekwave-swt6621s 并打 patches/ 补丁；
+  WiFi 已改为官方内核自带三件套，本仓库只保留 maxio 需要的源与固件）
 modules/firmware/               SWT6621S 固件 15 个（取自实机原厂系统，装配时强制注入）
 （.ko 不入库：一律由 build-modules.sh 对基镜像 header 现编，vermagic 才能对上
   6.18.18.c951-trim；曾提交的预编 .ko 是 6.18.18-trim 社区包产物，装机必被拒）
@@ -57,7 +57,7 @@ fetch-uboot-from-kk.sh          从 kk(iNextOS) 构建产物取本板 u-boot 对
 
 | # | 根因 | 证据 | 修复 |
 |---|------|------|------|
-| 1 | **复位被两个节点持有**（PHY 节点 `reset-gpios` + MAC 侧 `snps,reset-gpio` 三件套）→ 6.18 里第二次 `gpiod_request()` 返 `-EBUSY` → `Cannot register the MDIO bus` → GMAC probe 失败 | 实机日志 `-EBUSY` ×16、`probe … failed with error -16`（相位A）；commit `24b1db5` 的正则错位还把属性写进了 `rx-queues-config/queue0` | `dts/rk3568-kickpi-k1.dts` 删 PHY 侧与 queue0 的复位，**只留 MAC 侧**三件套（L1 实机 / L2 官方6.1 / L3 官方5.10 三线一致）；`tools/dts-pipeline/fix-phy-reset.py` 改为「只删不断言」→ 现在会清理并补齐 MAC 侧，违规 `exit 1` |
+| 1 | **复位被两个节点持有**（PHY 节点 `reset-gpios` + MAC 侧 `snps,reset-gpio` 三件套）→ 6.18 里第二次 `gpiod_request()` 返 `-EBUSY` → `Cannot register the MDIO bus` → GMAC probe 失败 | 实机日志 `-EBUSY` ×16、`probe … failed with error -16`（相位A）；commit `24b1db5` 的正则错位还把属性写进了 `rx-queues-config/queue0` | `dts/rk3568-kickpi-k1.dts` 删 PHY 侧与 queue0 的复位，**只留 MAC 侧**三件套（L1 实机 / L2 官方6.1 / L3 官方5.10 三线一致）；dts 手维护成品，生成期一次性工具（原 tools/dts-pipeline、merge-dtb.py）已按“跟官方原生走”原则删除 |
 | 2 | **内核里没有 0x7b744411 的 PHY 驱动**（2877 个模块 163 条 mdio 别名 0 命中；MAC 驱动 stmmac/dwmac-rk 反而齐全） | `a1-kernel-drivers.json` | `maxio.ko` 外挂是唯一路径；装配期注入 `updates/kickpi-k1/` |
 | 3 | **`maxio.ko` vermagic 对不上**（预编件 `6.18.18-trim` vs 基镜像 `6.18.18.c951-trim`；且 `CONFIG_MODULE_SIG/MODVERSIONS` 未开 → 逐字比较必拒） | 实机 `modinfo: ERROR: Module maxio not found.`；`modules.dep` 无 `updates/*` | 删掉预编 `.ko`；`build-modules.sh` 对基镜像 header 现编 + vermagic 硬闸；**`depmod` 条件恒假从未跑过** → 改用宿主 `depmod -b` 并断言 `modules.dep` 含 `maxio.ko` |
 | 4 | **加载顺序无保障**：`dwmac_rk.ko` 由 udev 冷插拔 10s 拉起，`kickpi-k1-modules.service` 11.19s 才跑 → `phy_attach_direct()` 先绑 Generic PHY，晚到的 maxio 被跳过 | driver-core 分析 + 实机时间轴 | `etc/modprobe.d` 写 `softdep dwmac_rk pre: maxio`；insmod 单元不再 `2>/dev/null` 吞错 |
