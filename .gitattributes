@@ -1,0 +1,12 @@
+# 行尾钉死 LF：本机 core.autocrlf=true 曾把 CRLF 经 API blob 直传入库，
+# 导致 CI 上 bash 报 set: pipefail invalid option name（run 38265979319）。
+* text=auto eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+*.dts text eol=lf
+*.dtb binary
+*.img binary
+*.itb binary
+*.ko binary
