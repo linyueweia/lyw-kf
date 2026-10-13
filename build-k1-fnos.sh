@@ -538,6 +538,37 @@ WRAP
     ln -sf ../kickpi-k1-eee-off.service "$OSFIX/etc/systemd/system/multi-user.target.wants/kickpi-k1-eee-off.service"
     echo "  ✓ 已装 EEE 关闭服务（kickpi-k1-eee-off.service，LPI 唤醒失败掉线修复）"
 
+    # (5b) EEE 第二层：NetworkManager dispatcher —— 每次接口 up 再关一次。
+    #      实机取证（2026-10-13/14，运行中的飞牛）：net-nosleep.service=enabled+active、
+    #      power/control=on，而 `ethtool --show-eee end0/end1` 仍是 enabled ——
+    #      EEE 会随链路重新协商自己开回来，只在开机那一刻关一次守不住。
+    install -Dm755 "$ASSETS/kickpi-k1-eee-dispatcher" \
+        "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off"
+    echo "  ✓ 已装 EEE dispatcher（接口 up/换 IP 后重新关 EEE）"
+
+    # (5c) 存量系统【在线修复】：本脚本的决策（EEE 三层件 / mask 厂商单元 / webdav 权限位 /
+    #      K1 卡 FAT 脏位）也能作用到已经跑着的飞牛系统上 —— 不必重刷镜像。
+    #      同时装一个首启 oneshot（marker 防重复），保证新刷镜像开箱即自愈。
+    install -Dm755 "$ASSETS/fnos-fix-log-errors.sh" "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh"
+    {
+        echo "[Unit]"
+        echo "Description=fnOS(KICKPI K1): first-boot log-error fixes (EEE / masks / webdav)"
+        echo "After=multi-user.target"
+        echo "ConditionPathExists=!/var/lib/fnos-fix-log-errors.done"
+        echo ""
+        echo "[Service]"
+        echo "Type=oneshot"
+        echo "ExecStart=/usr/local/sbin/fnos-fix-log-errors.sh"
+        echo "ExecStartPost=/bin/sh -c 'mkdir -p /var/lib && touch /var/lib/fnos-fix-log-errors.done'"
+        echo "RemainAfterExit=yes"
+        echo ""
+        echo "[Install]"
+        echo "WantedBy=multi-user.target"
+    } > "$OSFIX/etc/systemd/system/fnos-fix-log-errors.service"
+    ln -sf ../fnos-fix-log-errors.service \
+        "$OSFIX/etc/systemd/system/multi-user.target.wants/fnos-fix-log-errors.service"
+    echo "  ✓ 已装首启自愈单元（fnos-fix-log-errors.service；marker 防重复执行）"
+
     # 自证：缺任何一项都算构建失败（只看“文件存在”不算 —— mask 必须是指向 /dev/null 的软链）
     [[ -x "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh" ]] || fail "日志收集脚本未就位"
     # EEE 关闭修复件自证（关不掉 EEE = 链路间歇 Down 会复发，按仓库惯例 fail 而非静默）
@@ -552,6 +583,18 @@ WRAP
         || fail "kickpi-k1-eee-off.service ExecStart 不符"
     [[ -x "$OSFIX/usr/sbin/ethtool" || -x "$OSFIX/usr/bin/ethtool" ]] \
         || fail "镜像缺 ethtool（EEE 关闭服务会起不来）"
+    # EEE dispatcher 自证（第二层：接口 up 后重关 EEE；实机证明只开机关一次守不住）
+    [[ -x "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off" ]] \
+        || fail "EEE dispatcher 未就位（EEE 会随重新协商被打开）"
+    grep -q 'set-eee\|kickpi-k1-eee-off.sh' "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off" \
+        || fail "EEE dispatcher 内容不符（未调用关闭脚本）"
+    # 存量系统在线修复件 + 首启自愈单元自证
+    [[ -x "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh" ]] || fail "存量系统修复件未就位"
+    bash -n "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh" || fail "fnos-fix-log-errors.sh 语法错误"
+    [[ -L "$OSFIX/etc/systemd/system/multi-user.target.wants/fnos-fix-log-errors.service" ]] \
+        || fail "首启自愈单元未启用"
+    grep -q 'fnos-fix-log-errors.done' "$OSFIX/etc/systemd/system/fnos-fix-log-errors.service" \
+        || fail "首启自愈单元缺 marker 条件（会每次开机重跑）"
     [[ -e "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer" ]] || fail "日志收集定时器未启用"
     # mask 自证：单元【存在于镜像里】才要求已 mask（exim4 等在本基镜像中根本不存在，
     # 一刀切断言会把好构建判死；“存在却没 mask” 才是真问题）

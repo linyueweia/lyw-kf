@@ -1,0 +1,19 @@
+#!/bin/sh
+# KICKPI K1 / fnOS：NetworkManager 每次接口状态变化都再关一次 EEE。
+#
+# 为什么光靠开机服务不够（2026-10-13/14 实机取证）：
+#   运行中的飞牛上，net-nosleep.service = enabled+active、power/control=on，
+#   但 `ethtool --show-eee end0/end1` 仍是 **enabled** —— EEE 会随链路重新协商
+#   自己开回来，只在开机那一刻关一次守不住。故加这一层：接口 up/换 IP 就重关一次。
+#   （与 lyw-OS 线 eth-eee-off、lyw-kf assets/kickpi-k1-eee-off.sh 同案。）
+#
+# NM 约定：$1=接口名 $2=动作；dispatcher 是同步阻塞路径，故放后台执行。
+IFACE="$1"
+ACTION="$2"
+case "$ACTION" in
+	up|dhcp4-change|dhcp6-change|connectivity-change) ;;
+	*) exit 0 ;;
+esac
+[ -x /usr/local/sbin/kickpi-k1-eee-off.sh ] || exit 0
+( /bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh >>/var/log/kickpi-k1-eee-off.log 2>&1 & ) >/dev/null 2>&1
+exit 0

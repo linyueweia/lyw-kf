@@ -444,6 +444,51 @@ python tools/fit-resign.py C:/path/to/image.img
 
 ---
 
+## 6d. 存量系统日志错误复核 · 2026-10-14（运行中的飞牛，EEE 回归 + 厂商单元残留）
+
+> 采集：`journalctl -b` 全量 + `-p err`（151 行）+ `-p warning`（321 行）+ dmesg +
+> `systemctl --failed`；导出包留档（1.8 MB）。结论：**真正要修的只有 4 条**，其余是良性噪声。
+
+- **① EEE 回归（最要紧）**：`net-nosleep.service` = enabled+active、`power/control=on`，
+  但 `ethtool --show-eee end0/end1` 仍是 **`enabled`** —— 说明"只在开机那一刻关一次"
+  守不住：EEE 会随链路重新协商自己开回来。这也是 §6b 掉线故障的复发入口。
+  → 新增第二层：`assets/kickpi-k1-eee-dispatcher`（NetworkManager dispatcher，
+  接口 up/换 IP 再关一次），构建期注入 + 自证。
+- **② `exim4.service` failed**：`Cannot open main log file "/var/log/exim4/mainlog":
+  Permission denied: euid=0 egid=117`。本仓决策见 (3) 段：**未配置的 MTA 一律 mask**
+  （不是去给日志目录补权限 —— 那只是让它跑起来占资源）。
+- **③ `pwm-fancontrol.service` failed**：`Error: No fan configuration found in /boot/board.json`。
+  本板风扇由内核 `gpio-fan` 管，(3) 段决策同样为 **mask**。
+- **④ `webdav.service` 每次启动告警**：unit 带可执行位
+  （`Configuration file ... is marked executable`）→ `chmod 644`。
+
+良性噪声白名单（**不要改**，改了反而埋掉真问题）：
+
+| 日志 | 判定理由 |
+|---|---|
+| `MDIO device at address 1 is missing.` | 第二网口占位节点无器件；真认到的是 address 0（`PHY_ID 0x7b744411`） |
+| `invalid boot record signature` / `failed to recognize exfat type` / `Can't find valid F2FS(erofs) superblock` | 内核 blkid 挨个试文件系统的探测噪声 |
+| `sdhci-dwcmshc ... Can't reduce the clock below 52MHz in HS200/HS400 mode` | 信息级 |
+| `sshd[..]: ipblocker: connect(/run/trim_ipblocker.sock) failed` | 启动早期套接字未建；其后 `ipblocker.service` active、套接字存在 |
+| `nmbd: dump_workgroups() / current master browser` | Samba 浏览器选举正常输出 |
+| `[SKWSDIO INFO] skw_*` / `client N driver is not ready!` | SWT6621S 驱动启动打印 |
+| `FAT-fs (mmcblk1p1): Volume was not properly unmounted` | K1 卡未干净卸载留下的脏位；清法见修复件第 4 步 |
+
+新增能力：**存量系统在线修复**（不必重刷镜像）——
+`assets/fnos-fix-log-errors.sh`（EEE 三层件 + 按本仓决策 mask 厂商单元 + webdav 权限位 +
+K1 卡 FAT 脏位；幂等、自带备份与判据输出），构建期注入为
+`/usr/local/sbin/fnos-fix-log-errors.sh` + 首启 oneshot
+`fnos-fix-log-errors.service`（marker 防重复）。存量机器上直接跑：
+`sudo bash /usr/local/sbin/fnos-fix-log-errors.sh`。
+
+复检判据（跑完修复件后）：
+```bash
+systemctl --failed          # 期望：0 loaded units listed
+ethtool --show-eee end0 end1   # 期望：EEE status: disabled
+```
+
+---
+
 ## 7. 验收清单（每次改动后照做）
 
 1. `bash -n build-k1-fnos.sh verify-fnos-bootchain.sh` + `python -m py_compile tools/*.py`

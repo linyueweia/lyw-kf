@@ -38,6 +38,25 @@ else
     echo "  ✗ EEE 关闭修复件缺失（kickpi-k1-eee-off：build 注入/assets 脚本被删）"; FAIL=1
 fi
 
+# EEE 第二层（dispatcher）：实机证明"只在开机关一次"守不住 —— 运行中的飞牛
+# net-nosleep.service=enabled+active 而 ethtool --show-eee 仍是 enabled（2026-10-14 取证）。
+if [[ -f assets/kickpi-k1-eee-dispatcher ]] \
+   && grep -q 'dispatcher.d/90-kickpi-k1-eee-off' build-k1-fnos.sh 2>/dev/null \
+   && grep -q 'kickpi-k1-eee-off.sh' assets/kickpi-k1-eee-dispatcher; then
+    echo "  ✓ EEE dispatcher 在位（接口 up 后重关 EEE）"
+else
+    echo "  ✗ EEE dispatcher 缺失（EEE 会随重新协商被打开 → 掉线复发）"; FAIL=1
+fi
+
+# 存量系统在线修复件（不必重刷镜像）+ 首启自愈单元
+if [[ -x assets/fnos-fix-log-errors.sh || -f assets/fnos-fix-log-errors.sh ]] \
+   && bash -n assets/fnos-fix-log-errors.sh 2>/dev/null \
+   && grep -q 'fnos-fix-log-errors.service' build-k1-fnos.sh 2>/dev/null; then
+    echo "  ✓ 存量系统修复件在位（fnos-fix-log-errors.sh + 首启自愈单元注入）"
+else
+    echo "  ✗ 存量系统修复件缺失或语法错误"; FAIL=1
+fi
+
 # 网口 DT 门禁（对提交的 dist DTB）
 if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
     if bash tools/verify-k1-net-dts.sh dist/rk3568-kickpi-k1.dtb >/tmp/_rs_net.log 2>&1; then
