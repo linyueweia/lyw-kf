@@ -418,6 +418,32 @@ python tools/fit-resign.py C:/path/to/image.img
 
 ---
 
+## 6b. 网口间歇整口 Down（EEE/LPI）实测记录 · 2026-10-13
+
+> 触发：用户晨间"连不上 192.168.10.129、拿不到 IP、网口灯亮"。前六层坑全修好的系统，
+> 却整夜间歇掉线——排查半日定位为 EEE 省电态，两仓（lyw-OS 主路由线 / 本仓）同步修复。
+
+- **时间线**（主路由 journalctl，17h uptime）：10-12 18:28–21:45 密集 Link Down **34 次/3h**
+  （1–7 分钟一次，单次断 3s–5min 不等）→ 深夜 00:34–07:41 仅 1 次 → 07:41 用户起床时段
+  两端同时 Down 5s → 09:57 两条 = 关 EEE 动作本身的一次性重协商 → **此后零掉线**。
+- **判据链**：对端 `phy_eee_wakeup_error_n=8126`；`irq_rx_path_in_lpi_mode_n`=7811 万；
+  两端 `rx_crc_errors=0`（排除线材/水晶头——用户独立确认硬件接口完好）；soc 37°C；
+  `t68m-gmac-delay`/`gmac-phy-hold` 全程 active（排除已有修复失效）。
+- **处置**（两端已生效并持久化）：`ethtool --set-eee … eee off`（eth0–3 / end0–1/wlan0）
+  + `/sys/class/net/*/device/power/control` = `on`；`net-nosleep.service` active+enabled。
+- **复发判据**（次日复核用）：
+  ```bash
+  # 主路由：41 与 0 不涨 = 收案
+  journalctl -b --no-pager | grep -c 'eth1: Link is Down'
+  ethtool -S eth1 | grep phy_eee_wakeup_error
+  # 飞牛端：8126 不涨 = 收案
+  sudo ethtool -S end1 | grep phy_eee_wakeup_error
+  ```
+- **固化的修复**：`assets/kickpi-k1-eee-off.sh` + `kickpi-k1-eee-off.service`（构建注入+自证）、
+  `verify-repo-static.sh` 静态门禁、PORTING §3.8 坑⑦、总表 #11。详见 PORTING §3.8。
+
+---
+
 ## 7. 验收清单（每次改动后照做）
 
 1. `bash -n build-k1-fnos.sh verify-fnos-bootchain.sh` + `python -m py_compile tools/*.py`

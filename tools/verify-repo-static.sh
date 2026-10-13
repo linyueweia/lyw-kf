@@ -27,6 +27,17 @@ for d in "${SCAN_DIRS[@]}"; do
 done
 [[ $FAIL -eq 0 ]] && echo "  ✓ 未发现 eMMC 劫持路径/厂商 PARTUUID"
 
+# EEE 关闭修复件静态门禁（2026-10-13 实机定案：LPI 唤醒失败 → 链路间歇 Down，
+# 判据 phy_eee_wakeup_error_n=8126 + 高峰 34 次/3h Link Down + 两端 CRC=0。
+# 曾被 lyw-OS 线当废案删除并断言"必须不存在"，实机证据翻案重装——两仓不许再丢）
+if grep -q 'kickpi-k1-eee-off' build-k1-fnos.sh 2>/dev/null \
+   && [[ -f assets/kickpi-k1-eee-off.sh ]] \
+   && grep -q -- '--set-eee' assets/kickpi-k1-eee-off.sh 2>/dev/null; then
+    echo "  ✓ EEE 关闭修复件在位（build-k1-fnos.sh 注入 + assets 脚本 + --set-eee）"
+else
+    echo "  ✗ EEE 关闭修复件缺失（kickpi-k1-eee-off：build 注入/assets 脚本被删）"; FAIL=1
+fi
+
 # 网口 DT 门禁（对提交的 dist DTB）
 if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
     if bash tools/verify-k1-net-dts.sh dist/rk3568-kickpi-k1.dtb >/tmp/_rs_net.log 2>&1; then

@@ -57,6 +57,7 @@
 | 8 | 改 dts 忘重编 dist，CI 拦下 | 门禁按设计工作 | dtc 门禁同款参数重编同步 | `verify-repo-static.sh` 逐字节 cmp |
 | 9 | CI `set: pipefail invalid option name` | API blob 直传把工作区 CRLF 入库（autocrlf 只保护本地 commit 路径） | 3 文件转 LF + `.gitattributes eol=lf` + API 推送强制 LF | `.gitattributes` |
 | 10 | 构建脚本 head 拿错 vermagic 编模块被拒 | 社区内核包后缀与基镜像不同 | release 一律取自基镜像 | `build-modules.sh` vermagic 硬闸 |
+| 11 | 网口间歇性整口 Link Down（用网高峰 34 次/3h，深夜几乎不掉；灯亮但拿不到 IP） | EEE/LPI 省电态唤醒时序在 RK3568 dwmac + RTL8211F 翻车 → 整口重协商（对端 `phy_eee_wakeup_error_n=8126`、LPI 进出 7800 万次；两端 CRC=0 排除物理层） | 全口 `ethtool --set-eee … eee off` + `power/control=on`，开机执行带重试 | `assets/kickpi-k1-eee-off.sh` + `kickpi-k1-eee-off.service`（构建自证 + `verify-repo-static.sh` 静态门禁）；与 lyw-OS 线 `eth-eee-off` 同案同修 |
 
 ---
 
@@ -138,6 +139,28 @@
 - `clock_in_out = "output"`；assigned-clocks 2 组=4 cell、rates=2 cell；
 - 每个 mdio 下 `ethernet-phy@0` 必须带 `reg = <0x00>`（缺它 → invalid PHY address → 退化 Generic PHY）；
 - 不得残留 T68M 的 `realtek,` 属性。
+
+### 3.8 坑⑦ EEE/LPI：链路间歇整口 Down（2026-10-13 实机定案，与前六层独立）
+
+- **现象**：`end1`/对端口间歇 `Link is Down`，用网高峰（18:28–21:45）34 次/3h、深夜停网
+  几乎不掉；灯亮、CRC/误码全 0，恢复后 IP 不变——与前六层坑（都表现为"起不来/丢包"）完全不同。
+- **判据（缺一不可）**：
+  - `ethtool -S <nic> | grep phy_eee_wakeup_error` = **8126**（EEE 唤醒失败实锤）；
+  - `irq_rx_path_in_lpi_mode_n` 7800 万（网卡整夜在省电态进出循环）；
+  - 两端 CRC/误码=0（排除线材/水晶头）、温度 37°C（排除过热）；
+  - 掉线时段与用网高峰强相关（LPI 进出最频繁的时段 = 唤醒失败概率最高的时段）。
+- **病理**：EEE（Energy Efficient Ethernet）省电态 LPI 的唤醒时序在 RK3568 dwmac +
+  RTL8211F/Maxio 组合上翻车 → MAC 侧判唤醒失败 → 整口重新自协商。
+  **与前六层的关系**：前六层修"网口起不来/绑不上/丢包"，这一层修"跑着跑着整口掉"——
+  两个独立的病，互不替代。
+- **修复**：`assets/kickpi-k1-eee-off.sh` 对所有真实网卡 `ethtool --set-eee … eee off`
+  （不支持 EEE 的口自动跳过）+ `power/control=on`，15 次×2s 重试至全部成功；
+  `kickpi-k1-eee-off.service`（After=NetworkManager.service）开机执行。
+- **门禁**：构建自证（脚本在位/`sh -n`/`--set-eee`+`eee off` 内容/wants 链接/ethtool 依赖）
+  + `tools/verify-repo-static.sh` 静态断言。
+- ⚠ **历史翻案**：lyw-OS 线曾把关 EEE 当废案删除并在 CI 断言"残件必须不存在"
+  （理由：当时丢包的病根是 RGMII 时序，时序修好后误判 EEE 无罪）。本实机证据推翻该决定，
+  两仓已同步重装修复件并翻转断言——勿再按"官方默认不动 EEE"回退。
 
 ---
 

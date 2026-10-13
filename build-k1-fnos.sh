@@ -511,8 +511,47 @@ WRAP
         fi
     fi
 
+    # (5) 关闭网卡 EEE/LPI 省电（2026-10-13 实机定案：链路间歇 Down 的元凶）
+    #     病理：EEE/LPI 省电态唤醒时序在 RK3568 dwmac + RTL8211F 翻车 → 整口重协商掉线。
+    #     实机判据：对端 phy_eee_wakeup_error_n=8126、LPI 进出 7800 万次；高峰时段
+    #     (18:28–21:45) Link Down 34 次/3h 而深夜停网几乎不掉；两端 CRC=0（排除物理层）；
+    #     ethtool --set-eee … eee off 后归零。与 PORTING §3 五层坑独立——那治"丢包"，这治"掉线"。
+    #     历史：lyw-OS 线曾把关 EEE 当废案删除并断言"必须不存在"，本实机证据翻案，两仓同步重装。
+    install -Dm755 "$ASSETS/kickpi-k1-eee-off.sh" "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh"
+    # unit 用逐行 echo（仓库惯例，与 kickpi-k1-modules.service 同款）：
+    # heredoc 的 <<- 只剥制表符，配空格缩进会导致结束标记永不匹配（脚本直接坏掉）。
+    {
+        echo "[Unit]"
+        echo "Description=Disable NIC EEE/LPI (K1 fnOS link-stability fix)"
+        echo "After=NetworkManager.service"
+        echo ""
+        echo "[Service]"
+        echo "Type=oneshot"
+        echo "RemainAfterExit=yes"
+        echo "ExecStart=/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh"
+        echo "TimeoutStartSec=60"
+        echo ""
+        echo "[Install]"
+        echo "WantedBy=multi-user.target"
+    } > "$OSFIX/etc/systemd/system/kickpi-k1-eee-off.service"
+    mkdir -p "$OSFIX/etc/systemd/system/multi-user.target.wants"
+    ln -sf ../kickpi-k1-eee-off.service "$OSFIX/etc/systemd/system/multi-user.target.wants/kickpi-k1-eee-off.service"
+    echo "  ✓ 已装 EEE 关闭服务（kickpi-k1-eee-off.service，LPI 唤醒失败掉线修复）"
+
     # 自证：缺任何一项都算构建失败（只看“文件存在”不算 —— mask 必须是指向 /dev/null 的软链）
     [[ -x "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh" ]] || fail "日志收集脚本未就位"
+    # EEE 关闭修复件自证（关不掉 EEE = 链路间歇 Down 会复发，按仓库惯例 fail 而非静默）
+    [[ -x "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" ]] || fail "EEE 关闭脚本未就位"
+    sh -n "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "kickpi-k1-eee-off.sh 语法错误"
+    grep -q -- '--set-eee' "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "EEE 脚本缺 --set-eee"
+    grep -q 'eee off' "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "EEE 脚本缺 'eee off'"
+    [[ -L "$OSFIX/etc/systemd/system/multi-user.target.wants/kickpi-k1-eee-off.service" ]] \
+        || fail "kickpi-k1-eee-off.service 未启用（multi-user wants 缺链）"
+    grep -q 'ExecStart=/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh' \
+        "$OSFIX/etc/systemd/system/kickpi-k1-eee-off.service" \
+        || fail "kickpi-k1-eee-off.service ExecStart 不符"
+    [[ -x "$OSFIX/usr/sbin/ethtool" || -x "$OSFIX/usr/bin/ethtool" ]] \
+        || fail "镜像缺 ethtool（EEE 关闭服务会起不来）"
     [[ -e "$OSFIX/etc/systemd/system/timers.target.wants/k1-collect-logs.timer" ]] || fail "日志收集定时器未启用"
     # mask 自证：单元【存在于镜像里】才要求已 mask（exim4 等在本基镜像中根本不存在，
     # 一刀切断言会把好构建判死；“存在却没 mask” 才是真问题）
