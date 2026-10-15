@@ -40,8 +40,16 @@ BASE="${BASE:?需要 BASE=<飞牛基镜像 .img>}"
 #   机制与自建素材已按「跟官方原生走」原则删除。
 DTB="${DTB:?需要 DTB=<rk3568-kickpi-k1.dtb>}"
 MODULES_DIR="${MODULES_DIR:-}"
-DEVICE_LABEL="${DEVICE_LABEL:-KICKPI-K1}"
-BUILD_NUM="${BUILD_NUM:-$(date +%Y%m%d)}"
+# 产物命名（2026-10-15 用户定案）：fnos_<地区>_<架构>_<Debian主版本>_<板型>.img
+#   例：fnos_Mainland-PE_arm_12_Kickpi-k1.img —— 一眼对齐飞牛官方镜像风格。
+#   分段可用环境变量覆盖；IMG_NAME 可整体覆盖（CI/本地都不再依赖旧 DEVICE_LABEL_<num> 名）。
+OS_NAME="${OS_NAME:-fnos}"
+IMG_REGION="${IMG_REGION:-Mainland-PE}"
+IMG_ARCH="${IMG_ARCH:-arm}"
+IMG_DEBIAN_MAJOR="${IMG_DEBIAN_MAJOR:-12}"
+IMG_BOARD="${IMG_BOARD:-Kickpi-k1}"
+IMG_NAME="${IMG_NAME:-${OS_NAME}_${IMG_REGION}_${IMG_ARCH}_${IMG_DEBIAN_MAJOR}_${IMG_BOARD}.img}"
+BUILD_NUM="${BUILD_NUM:-$(date +%Y%m%d)}"   # 仅留作构建日志追溯，不再进产物名（release tag + SHA256SUMS 可追溯）
 OUT_DIR="${OUT_DIR:-$(pwd)/out}"
 
 BOOT_MNT=/mnt/k1fnos_boot
@@ -73,7 +81,7 @@ fi
 echo "  DTB sha256: $(sha256sum "$DTB" | cut -c1-16)…"
 
 mkdir -p "$OUT_DIR"
-IMG="$OUT_DIR/${DEVICE_LABEL}_${BUILD_NUM}.img"
+IMG="$OUT_DIR/$IMG_NAME"
 
 echo
 echo "==== 1) 复制基镜像 ===="
@@ -177,7 +185,7 @@ else
 verbosity=1
 bootlogo=false
 console=both
-extraargs=cma=256M
+extraargs=cma=1G
 fdtfile=rockchip/$DTB_NAME
 EOF
 fi
@@ -192,7 +200,7 @@ fi
 # 要回退旧内核时改 fnEnv.txt 的 kernelfile=/vmlinuz-<旧内核> 即可（官方键）。
 # 之前仓库自造的 extlinux.conf 是静态 root=PARTUUID=（构建期读到的值，继承自官方
 # 基镜像、所有产物都一样），u-boot 又优先走 extlinux → TF 卡与 eMMC 双介质并存会串盘。
-K1_EXTRAARGS="cma=256M loglevel=7 ignore_loglevel"
+K1_EXTRAARGS="cma=1G loglevel=7 ignore_loglevel"
 if grep -q '^extraargs=' "$BOOT_MNT/fnEnv.txt"; then
     grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
     { cat /tmp/_fnenv.keep; echo "extraargs=$K1_EXTRAARGS"; } > "$BOOT_MNT/fnEnv.txt"
@@ -210,7 +218,7 @@ cat > "$BOOT_MNT/extlinux/extlinux.conf.k1-static" <<EOF
 label fnOS (KICKPI K1)
     kernel /vmlinuz
     fdt /dtb/rockchip/$DTB_NAME
-    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
+    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=1G root=PARTUUID=$ROOT_PARTUUID rw rootwait
 EOF
 
 echo "  ── 引导配置（官方 fnEnv.txt，boot.scr 现场取 PARTUUID）──"
@@ -503,7 +511,7 @@ WRAP
         if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
             if ! grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt"; then
                 grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-                { cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
+                { cat /tmp/_fnenv.keep; echo "extraargs=cma=1G loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
                 echo "  ✓ fnEnv extraargs 已含 loglevel=7 ignore_loglevel"
             fi
             sync

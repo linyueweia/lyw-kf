@@ -17,6 +17,12 @@
 #        本板风扇由内核 gpio-fan 管，本仓决策 = mask（同上 (3) 段）。
 #     4) webdav.service 每次启动告警 "marked executable" → chmod 644。
 #     5) 每次启动还报 networking.service（ifupdown 残留）→ 本仓决策 = mask。
+#     6) 相册 AI 整机挂死（2026-10-14 两次实机取证）—— rknpu 要 173/339MB 连续 DMA，
+#        而 fnEnv.txt 的 cma=256M < 339MB 请求 → 必失败 → 闭源驱动挂住内核，只能断电。
+#        → fnEnv.txt extraargs cma=256M → 1G（重启生效）。
+#     7) 硬件看门狗无人管（官方零管理：/usr/trim 全家无一引用 /dev/watchdog）
+#        → 装 Debian 标准 watchdog 包挂 /dev/watchdog0（Synopsys DW，44s 超时无 magic close），
+#          内核再挂死时 44s 内硬复位自愈，不再依赖人工断电。
 #   良性噪声（**不要改**，改了反而误事）：见文件末尾白名单。
 #
 # 用法（飞牛上，root）：  sudo bash fnos-fix-log-errors.sh
@@ -30,7 +36,7 @@ ok(){  printf '  ✓ %s\n' "$*"; }
 bad(){ printf '  ✗ %s\n' "$*"; }
 
 say "0) 备份现场到 $BK"
-for f in /etc/systemd/system/net-nosleep.service /etc/systemd/system/webdav.service /boot/board.json; do
+for f in /etc/systemd/system/net-nosleep.service /etc/systemd/system/webdav.service /boot/board.json /boot/fnEnv.txt; do
 	[ -e "$f" ] && cp -a "$f" "$BK/" 2>/dev/null
 done
 systemctl --failed --no-pager > "$BK/units-failed-before.txt" 2>&1 || true
@@ -161,8 +167,50 @@ else
 	echo "  (跳过：卡不在位 / 已挂载 / 不是 K1 卡（LABEL≠armbi_boot）)"
 fi
 
-# ── 5) 复检 ─────────────────────────────────────────────────────────────
-say "5) 复检"
+# ── 5) NPU CMA 扩容：fnEnv.txt extraargs cma=256M → 1G ────────────────────
+say "5) NPU CMA 扩容（相册 AI 整机挂死根因：rknpu 请求 173/339MB > cma=256M 总量）"
+# 病理（2026-10-14 两次实机取证，kern.log 现场）：
+#   trim.img2vec → drm_ioctl → rknpu_gem_object_create → dma_direct_alloc 一次要
+#   181448704 或 355860480 字节连续 DMA；CMA 池总量 256M < 339M 请求 → 必失败（-16）；
+#   闭源 rknpu 0.9.8 失败路径把内核挂死（日志戛然而止、无 panic 输出），只能断电。
+#   修法：CMA 1G（4GB 内存下空闲时可被普通 movable 页借用，不浪费）。
+if [ -f /boot/fnEnv.txt ]; then
+	if grep -q '^extraargs=.*cma=256M' /boot/fnEnv.txt; then
+		sed -i 's/\(extraargs=.*\)cma=256M/\1cma=1G/' /boot/fnEnv.txt
+		ok "fnEnv.txt: cma=256M → cma=1G（重启后生效）"
+	elif grep -q '^extraargs=.*cma=' /boot/fnEnv.txt; then
+		ok "fnEnv.txt 已含非 256M 的 cma 值，不动：$(grep '^extraargs=' /boot/fnEnv.txt)"
+	else
+		grep -v '^extraargs=' /boot/fnEnv.txt > /tmp/_fnenv.keep
+		{ cat /tmp/_fnenv.keep; echo "extraargs=cma=1G loglevel=7 ignore_loglevel"; } > /boot/fnEnv.txt
+		ok "fnEnv.txt 新增 extraargs=cma=1G loglevel=7 ignore_loglevel（重启后生效）"
+	fi
+else
+	bad "/boot/fnEnv.txt 不存在（本脚本只针对 fnOS）"
+fi
+
+# ── 6) 硬件看门狗守护：挂死 44 秒硬复位，不再人工断电 ──────────────────────
+say "6) 硬件看门狗（官方零管理：/usr/trim 无一引用 /dev/watchdog，挂死只能断电）"
+if ! command -v watchdog >/dev/null 2>&1; then
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq watchdog >/dev/null 2>&1 \
+		&& ok "已装 Debian 标准 watchdog 包" \
+		|| bad "watchdog 包安装失败（无网络/源？）——看门狗未启用，挂死仍需断电"
+fi
+if command -v watchdog >/dev/null 2>&1; then
+	grep -qE '^watchdog-device\s*=\s*/dev/watchdog0' /etc/watchdog.conf 2>/dev/null \
+		|| echo 'watchdog-device = /dev/watchdog0' >> /etc/watchdog.conf
+	systemctl enable watchdog.service >/dev/null 2>&1
+	systemctl restart watchdog.service >/dev/null 2>&1
+	sleep 2
+	if systemctl is-active --quiet watchdog.service; then
+		ok "watchdog.service active（$(wdctl 2>/dev/null | awk '/^Device/{print $3} /Timeout/{print "超时"$3"s"}' | tr '\n' ' ' | sed 's/  */ /g')）"
+	else
+		bad "watchdog.service 未能启动：journalctl -u watchdog.service -n 20 查原因"
+	fi
+fi
+
+# ── 7) 复检 ─────────────────────────────────────────────────────────────
+say "7) 复检"
 echo "  --- systemctl --failed ---"
 systemctl --failed --no-pager | sed 's/^/  /'
 echo "  --- 本轮 err 级计数 ---"

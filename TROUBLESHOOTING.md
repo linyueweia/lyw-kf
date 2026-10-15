@@ -489,6 +489,54 @@ ethtool --show-eee end0 end1   # 期望：EEE status: disabled
 
 ---
 
+## 6e. 相册 AI 整机挂死（NPU CMA 不足）实测定案 · 2026-10-15
+
+**症状**：用相册 AI（人脸/物品识别）数分钟内整机失联——SSH/Web/SMB 全灭，
+日志戛然而止（无 panic、无 oops 收尾），只能断电重启。2026-10-14 晚连续两次。
+
+**取证（/var/log/kern.log，两次挂死现场逐条对上）**：
+
+```
+22:03:03 cma: __cma_alloc: reserved: alloc failed, req-size: 44299 pages, ret: -16
+         RKNPU fde40000.npu: RKNPU: failed to allocate 181448704 buffer.
+22:48–23:05 反复 req-size: 86880 pages 失败 → 355860480 buffer 全失败
+23:05 后日志中断（第一次挂死，用户断电）
+23:28:36 同款 Call trace: rknpu_gem_object_create → dma_direct_alloc → __alloc_frozen_pages
+23:31 rk_vcodec 连环 timeout + rkvenc resetting... → 日志中断（第二次挂死）
+```
+
+**根因链**：
+1. 相册 AI 走 `trim.img2vec → drm_ioctl → rknpu_gem_object_create`，单次要
+   **173MB 或 339MB 连续 DMA 内存**，全走 CMA 池；
+2. 官方基镜像 `cma=256M` —— **339MB 请求 > 池总量，数学上必失败**；
+3. 闭源 rknpu 0.9.8 的分配失败路径把内核整个挂住（持锁/关中断，无任何输出），
+   三个本可自愈的机制全不在场：`CONFIG_DETECT_HUNG_TASK` 未编译、
+   `softlockup_panic` 未开、硬件看门狗 `/dev/watchdog0` 无人打开（官方零管理——
+   `/usr/trim` 全家无一引用它，逐二进制 strings 取证）。
+
+**定案修复（两层）**：
+1. `fnEnv.txt` 的 `extraargs`：`cma=256M` → **`cma=1G`**（本仓 build-k1-fnos.sh 的
+   生成模板、K1_EXTRAARGS、extlinux 静态回退、在线修复件四处同步改）。
+   4GB 内存下 CMA 空闲时可被普通 movable 页借用，不浪费；1G 对 339MB 请求留足余量。
+2. 装 Debian 标准 `watchdog` 包挂 `/dev/watchdog0`（Synopsys DesignWare，
+   44s 超时、无 magic close）并 `systemctl enable watchdog.service` ——
+   极端情况下内核再挂死，44 秒内硬件硬复位自愈，不再人工断电。
+   （watchdog.service 的 WantedBy 是 graphical.target，本机开机链未必经过它；
+   实测 `systemctl enable` 生成的 wants 链即足够，勿再加 drop-in。）
+
+**实机验证（2026-10-15，eMMC fnOS）**：重启后 `/proc/cmdline` 含 `cma=1G`、
+`CmaTotal: 1048576 kB`；watchdog.service 开机自动 active（journal: "Started
+watchdog.service" + "hardware watchdog identity: Synopsys DesignWare Watchdog"）。
+
+**复检判据**：
+```bash
+grep -o 'cma=[0-9]*[MG]' /proc/cmdline   # 期望：cma=1G
+systemctl is-active watchdog.service      # 期望：active
+wdctl | head -6                           # 期望：Device /dev/watchdog0, Timeleft 在走
+```
+
+---
+
 ## 7. 验收清单（每次改动后照做）
 
 1. `bash -n build-k1-fnos.sh verify-fnos-bootchain.sh` + `python -m py_compile tools/*.py`

@@ -234,7 +234,7 @@ jobs:
           cat out/SHA256SUMS || true
           # ── 产物 u-boot 防呆断言（Assemble 之后，对象 = 真正交付的引导件）──
           # 必须 v1.23（与本板 eMMC 原厂同哈希）；拒绝 T68M V1.18 与 1056MHz 家族。
-          F=$(ls out/KICKPI-K1_*.img 2>/dev/null | head -1)
+          F=$(ls out/fnos_*.img 2>/dev/null | head -1)
           if [[ -z "$F" ]]; then
             echo "::error::out/ 下没有 .img 产物（现有: $(ls out/ | tr '\n' ' ')）"
             exit 1
