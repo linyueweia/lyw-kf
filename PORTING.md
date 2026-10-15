@@ -186,7 +186,7 @@
 - 模块注入：`/usr/src/kickpi-k1/`（源码，供开机现编）+ `updates/kickpi-k1/`（预编，供首启）+
   `etc/modprobe.d` softdep + `depmod -b` 断言。
 - 固件双路径：`/lib/firmware/` 根 + `seekwave/` 子目录（驱动只认后者），各 15 文件断言。
-- 产物：`out/KICKPI-K1_<n>.img(.xz)` + SHA256SUMS。
+- 产物：`out/fnos_Mainland-PE_arm_12_Kickpi-k1.img(.xz)` + SHA256SUMS（2026-10-15 定案命名，`IMG_NAME` 可覆盖）。
 
 ---
 
