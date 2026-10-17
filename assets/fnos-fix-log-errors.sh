@@ -134,8 +134,14 @@ if command -v watchdog >/dev/null 2>&1; then
 	grep -qE '^watchdog-device\s*=\s*/dev/watchdog0' /etc/watchdog.conf 2>/dev/null \
 		|| echo 'watchdog-device = /dev/watchdog0' >> /etc/watchdog.conf
 	systemctl enable watchdog.service >/dev/null 2>&1
-	systemctl restart watchdog.service >/dev/null 2>&1
-	sleep 2
+	# 已 active 时 restart 会先 stop；watchdog 守护收到 TERM 以 1 退出，systemd 会把这次 restart
+	# 判成失败（unit 落到 failed 且没起来）——2026-10-17 在 K1 实机踩到。改为：静默 restart + 轮询补 start。
+	systemctl restart watchdog.service >/dev/null 2>&1 || true
+	for _try in 1 2 3; do
+		sleep 2
+		systemctl is-active --quiet watchdog.service && break
+		systemctl start watchdog.service >/dev/null 2>&1 || true
+	done
 	if systemctl is-active --quiet watchdog.service; then
 		ok "watchdog.service active（$(wdctl 2>/dev/null | awk '/^Device/{print $3} /Timeout/{print "超时"$3"s"}' | tr '\n' ' ' | sed 's/  */ /g')）"
 	else
