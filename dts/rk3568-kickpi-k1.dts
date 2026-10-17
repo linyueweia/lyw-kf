@@ -1107,6 +1107,8 @@
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
 				phandle = <0x57>;
+				/* EEE 1G 关闭（2026-10-17 实机定案，内核官方机制）： RK3568 dwmac + Maxio MAE0621A 与对端 RTL8211F 协商到 EEE 后，RX 侧在 LPI 里疯狂进出 （实测 irq_rx_path_in_lpi_mode_n 1400 万次、phy_eee_wakeup_error_n 数百），症状是 "灯亮、能发不能收"：本机 ARP/DHCP 一直往外发，却收不到对端任何回应 → 拿不到 IP / 整口不通； 对端关掉 EEE 并重协商后立刻恢复 0% 丢包。 eee-broken-1000t 由 of_set_phy_eee_broken() 解析，每次 aneg 都会把 1000T 从 EEE 通告位清掉， 只关 1G 的 EEE（100M EEE 保持默认），不需要任何用户态脚本。  */
+				eee-broken-1000t;
 			};
 		};
 
@@ -5266,6 +5268,7 @@
 				reg = <0x00>;
 				compatible = "ethernet-phy-ieee802.3-c22";
 				phandle = <0xd4>;
+				eee-broken-1000t;
 			};
 		};
 

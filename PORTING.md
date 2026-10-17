@@ -57,7 +57,7 @@
 | 8 | 改 dts 忘重编 dist，CI 拦下 | 门禁按设计工作 | dtc 门禁同款参数重编同步 | `verify-repo-static.sh` 逐字节 cmp |
 | 9 | CI `set: pipefail invalid option name` | API blob 直传把工作区 CRLF 入库（autocrlf 只保护本地 commit 路径） | 3 文件转 LF + `.gitattributes eol=lf` + API 推送强制 LF | `.gitattributes` |
 | 10 | 构建脚本 head 拿错 vermagic 编模块被拒 | 社区内核包后缀与基镜像不同 | release 一律取自基镜像 | `build-modules.sh` vermagic 硬闸 |
-| 11 | 网口间歇性整口 Link Down（用网高峰 34 次/3h，深夜几乎不掉；灯亮但拿不到 IP） | ~~EEE/LPI 唤醒时序翻车~~ **2026-10-17 改判**：在主路由 T68M 上按日志复核，EEE 本就关闭时掉线照样发生，141 次掉线每次都伴随对端 1–5 s 内重新 DHCP（对端在重启），20 s 空档也不符本端自协商时长 ⇒ EEE 不是这个症状的解 | **不再关 EEE**（按官方默认开启）；历史三层件已移除，存量系统由 `assets/fnos-fix-log-errors.sh` 清掉 | 构建反向门禁（镜像不得含 `kickpi-k1-eee-off.sh`/service/dispatcher）+ `tools/verify-repo-static.sh` 反向断言 |
+| 11 | 网口间歇性整口 Link Down / "灯亮但拿不到 IP" | **2026-10-17 实机复现并定案**：EEE 1G 在 RK3568 dwmac + Maxio MAE0621A 上会让 RX 侧在 LPI 里疯狂进出（K1 侧 `irq_rx_path_in_lpi_mode_n` 1400 万次、`phy_eee_wakeup_error_n` 241），表现为**能发不能收**（ARP/DHCP 一直发、收不到回应，ping 100% 丢），链路 carrier 不变 | DT 的 PHY 节点写 `eee-broken-1000t`（内核 `of_set_phy_eee_broken()` 每次自协商清 1000T 通告位），只关 1G EEE；**不用任何用户态件** | `dts/rk3568-kickpi-k1.dts`（两个 PHY）+ `dist` DTB 现编 + `tools/verify-k1-net-dts.sh` 硬门禁 |
 
 ---
 

@@ -57,6 +57,13 @@ for b in $(grep -n 'ethernet-phy@0 {' "$TMP/d.dts" | cut -d: -f1); do
 done
 [ "$PHY_BAD" = "0" ] && echo "  OK   两个 PHY 块均不持有复位"
 
+echo "-- PHY 节点：EEE 1G 必须在内核层关闭（eee-broken-1000t）"
+EEE_BAD=0
+for b in $(grep -n 'ethernet-phy@0 {' "$TMP/d.dts" | cut -d: -f1); do
+  if sed -n "${b},$((b+16))p" "$TMP/d.dts" | grep -q 'eee-broken-1000t'; then :
+  else echo "  ✗    PHY 块(行 $b) 缺 eee-broken-1000t（EEE 1G 会让 Maxio PHY 的 RX 打死）"; EEE_BAD=1; FAIL=1; fi
+done
+[ "$EEE_BAD" = "0" ] && echo "  OK   两个 PHY 块都标了 eee-broken-1000t"
 echo "-- 队列节点（不得有复位垃圾属性）"
 hasnt "queue0 内 reset-*"  'queue0 \{[^}]*reset-(gpios|assert-us|deassert-us)'
 
