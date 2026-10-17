@@ -29,7 +29,10 @@ done
 
 # EEE 反向门禁（2026-10-17 改判）：EEE 按官方默认保持开启 ——
 # 构建脚本与 assets 里都不得再出现 EEE 关闭件，且不得往镜像注入关闭服务/dispatcher。
-if grep -q "kickpi-k1-eee-off" build-k1-fnos.sh 2>/dev/null \
+# 只认"真的在装/在 enable"的写法，避免把反向断言里出现的文件名当命中。
+if grep -qF 'install -Dm755 "$ASSETS/kickpi-k1-eee-off.sh"' build-k1-fnos.sh 2>/dev/null \
+   || grep -qF 'ln -sf ../kickpi-k1-eee-off.service' build-k1-fnos.sh 2>/dev/null \
+   || grep -qF 'install -Dm755 "$ASSETS/kickpi-k1-eee-dispatcher"' build-k1-fnos.sh 2>/dev/null \
    || [[ -f assets/kickpi-k1-eee-off.sh ]] \
    || [[ -f assets/kickpi-k1-eee-dispatcher ]]; then
     echo "  ✗ 仍存在 EEE 关闭件（kickpi-k1-eee-off / dispatcher）—— 与官方默认不一致"; FAIL=1
