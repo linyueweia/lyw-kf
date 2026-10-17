@@ -57,7 +57,7 @@
 | 8 | 改 dts 忘重编 dist，CI 拦下 | 门禁按设计工作 | dtc 门禁同款参数重编同步 | `verify-repo-static.sh` 逐字节 cmp |
 | 9 | CI `set: pipefail invalid option name` | API blob 直传把工作区 CRLF 入库（autocrlf 只保护本地 commit 路径） | 3 文件转 LF + `.gitattributes eol=lf` + API 推送强制 LF | `.gitattributes` |
 | 10 | 构建脚本 head 拿错 vermagic 编模块被拒 | 社区内核包后缀与基镜像不同 | release 一律取自基镜像 | `build-modules.sh` vermagic 硬闸 |
-| 11 | 网口间歇性整口 Link Down（用网高峰 34 次/3h，深夜几乎不掉；灯亮但拿不到 IP） | EEE/LPI 省电态唤醒时序在 RK3568 dwmac + RTL8211F 翻车 → 整口重协商（对端 `phy_eee_wakeup_error_n=8126`、LPI 进出 7800 万次；两端 CRC=0 排除物理层） | 全口 `ethtool --set-eee … eee off` + `power/control=on`，开机执行带重试 | `assets/kickpi-k1-eee-off.sh` + `kickpi-k1-eee-off.service`（构建自证 + `verify-repo-static.sh` 静态门禁）；与 lyw-OS 线 `eth-eee-off` 同案同修 |
+| 11 | 网口间歇性整口 Link Down（用网高峰 34 次/3h，深夜几乎不掉；灯亮但拿不到 IP） | ~~EEE/LPI 唤醒时序翻车~~ **2026-10-17 改判**：在主路由 T68M 上按日志复核，EEE 本就关闭时掉线照样发生，141 次掉线每次都伴随对端 1–5 s 内重新 DHCP（对端在重启），20 s 空档也不符本端自协商时长 ⇒ EEE 不是这个症状的解 | **不再关 EEE**（按官方默认开启）；历史三层件已移除，存量系统由 `assets/fnos-fix-log-errors.sh` 清掉 | 构建反向门禁（镜像不得含 `kickpi-k1-eee-off.sh`/service/dispatcher）+ `tools/verify-repo-static.sh` 反向断言 |
 
 ---
 
@@ -153,11 +153,12 @@
   RTL8211F/Maxio 组合上翻车 → MAC 侧判唤醒失败 → 整口重新自协商。
   **与前六层的关系**：前六层修"网口起不来/绑不上/丢包"，这一层修"跑着跑着整口掉"——
   两个独立的病，互不替代。
-- **修复**：`assets/kickpi-k1-eee-off.sh` 对所有真实网卡 `ethtool --set-eee … eee off`
-  （不支持 EEE 的口自动跳过）+ `power/control=on`，15 次×2s 重试至全部成功；
-  `kickpi-k1-eee-off.service`（After=NetworkManager.service）开机执行。
-- **门禁**：构建自证（脚本在位/`sh -n`/`--set-eee`+`eee off` 内容/wants 链接/ethtool 依赖）
-  + `tools/verify-repo-static.sh` 静态断言。
+- **~~修复~~（2026-10-17 撤销）**：曾经装 `assets/kickpi-k1-eee-off.sh`（全口 `--set-eee … eee off`
+  + `power/control=on`，15 次×2s 重试）+ `kickpi-k1-eee-off.service` 开机执行。
+  **现决定不再关闭 EEE**：脚本与单元已从仓库与镜像中删除，存量系统由 `fnos-fix-log-errors.sh` 清理。
+  改判依据见 TROUBLESHOOTING §6b 顶部的横幅（EEE 关闭态下掉线照样发生；每次掉线都对应对端重启）。
+- **门禁**：改为反向断言 —— 构建脚本里不得出现 `install …/kickpi-k1-eee-off.sh`、
+  `ln -sf ../kickpi-k1-eee-off.service`；`tools/verify-repo-static.sh` 同步反向。
 - ⚠ **历史翻案**：lyw-OS 线曾把关 EEE 当废案删除并在 CI 断言"残件必须不存在"
   （理由：当时丢包的病根是 RGMII 时序，时序修好后误判 EEE 无罪）。本实机证据推翻该决定，
   两仓已同步重装修复件并翻转断言——勿再按"官方默认不动 EEE"回退。

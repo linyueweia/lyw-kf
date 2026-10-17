@@ -434,8 +434,9 @@ python tools/fit-resign.py C:/path/to/image.img
 - **判据链**：对端 `phy_eee_wakeup_error_n=8126`；`irq_rx_path_in_lpi_mode_n`=7811 万；
   两端 `rx_crc_errors=0`（排除线材/水晶头——用户独立确认硬件接口完好）；soc 37°C；
   `t68m-gmac-delay`/`gmac-phy-hold` 全程 active（排除已有修复失效）。
-- **处置**（两端已生效并持久化）：`ethtool --set-eee … eee off`（eth0–3 / end0–1/wlan0）
-  + `/sys/class/net/*/device/power/control` = `on`；`net-nosleep.service` active+enabled。
+- **当时的处置**（历史记录，**已于 2026-10-17 撤销**）：`ethtool --set-eee … eee off`
+  （eth0–3 / end0–1/wlan0）+ `/sys/class/net/*/device/power/control` = `on`；`net-nosleep.service` active+enabled。
+  现行决策：EEE 按官方默认保持开启，镜像与运行系统都不再装 EEE 关闭件（详见 §6b 顶部横幅）。
 - **复发判据**（次日复核用）：
   ```bash
   # 主路由：41 与 0 不涨 = 收案
