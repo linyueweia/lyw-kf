@@ -519,48 +519,18 @@ WRAP
         fi
     fi
 
-    # (5) 关闭网卡 EEE/LPI 省电（2026-10-13 实机定案：链路间歇 Down 的元凶）
-    #     病理：EEE/LPI 省电态唤醒时序在 RK3568 dwmac + RTL8211F 翻车 → 整口重协商掉线。
-    #     实机判据：对端 phy_eee_wakeup_error_n=8126、LPI 进出 7800 万次；高峰时段
-    #     (18:28–21:45) Link Down 34 次/3h 而深夜停网几乎不掉；两端 CRC=0（排除物理层）；
-    #     ethtool --set-eee … eee off 后归零。与 PORTING §3 五层坑独立——那治"丢包"，这治"掉线"。
-    #     历史：lyw-OS 线曾把关 EEE 当废案删除并断言"必须不存在"，本实机证据翻案，两仓同步重装。
-    install -Dm755 "$ASSETS/kickpi-k1-eee-off.sh" "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh"
-    # unit 用逐行 echo（仓库惯例，与 kickpi-k1-modules.service 同款）：
-    # heredoc 的 <<- 只剥制表符，配空格缩进会导致结束标记永不匹配（脚本直接坏掉）。
-    {
-        echo "[Unit]"
-        echo "Description=Disable NIC EEE/LPI (K1 fnOS link-stability fix)"
-        echo "After=NetworkManager.service"
-        echo ""
-        echo "[Service]"
-        echo "Type=oneshot"
-        echo "RemainAfterExit=yes"
-        echo "ExecStart=/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh"
-        echo "TimeoutStartSec=60"
-        echo ""
-        echo "[Install]"
-        echo "WantedBy=multi-user.target"
-    } > "$OSFIX/etc/systemd/system/kickpi-k1-eee-off.service"
-    mkdir -p "$OSFIX/etc/systemd/system/multi-user.target.wants"
-    ln -sf ../kickpi-k1-eee-off.service "$OSFIX/etc/systemd/system/multi-user.target.wants/kickpi-k1-eee-off.service"
-    echo "  ✓ 已装 EEE 关闭服务（kickpi-k1-eee-off.service，LPI 唤醒失败掉线修复）"
-
-    # (5b) EEE 第二层：NetworkManager dispatcher —— 每次接口 up 再关一次。
-    #      实机取证（2026-10-13/14，运行中的飞牛）：net-nosleep.service=enabled+active、
-    #      power/control=on，而 `ethtool --show-eee end0/end1` 仍是 enabled ——
-    #      EEE 会随链路重新协商自己开回来，只在开机那一刻关一次守不住。
-    install -Dm755 "$ASSETS/kickpi-k1-eee-dispatcher" \
-        "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off"
-    echo "  ✓ 已装 EEE dispatcher（接口 up/换 IP 后重新关 EEE）"
-
-    # (5c) 存量系统【在线修复】：本脚本的决策（EEE 三层件 / mask 厂商单元 / webdav 权限位 /
+    # (5) EEE/LPI：**不再关闭**（2026-10-17 改判）
+    #     历史：2026-10-13 曾按"EEE 唤醒时序在 dwmac + PHY 上翻车 → 整口间歇 Link Down"
+    #     判定装了脚本+开机服务+NM dispatcher 三层关闭件。2026-10-17 在主路由 T68M 上按日志复核推翻：
+    #     EEE 本就处于关闭态时掉线照样发生，且 141 次掉线每次都伴随对端 1–5 s 内重新 DHCP（对端在重启），
+    #     因此关闭 EEE 不是该症状的解。按官方默认保持开启，镜像里不得再装任何 EEE 关闭件（下方反向自证）。
+    # (5c) 存量系统【在线修复】：本脚本的决策（清除历史 EEE 关闭件 / mask 厂商单元 / webdav 权限位 /
     #      K1 卡 FAT 脏位）也能作用到已经跑着的飞牛系统上 —— 不必重刷镜像。
     #      同时装一个首启 oneshot（marker 防重复），保证新刷镜像开箱即自愈。
     install -Dm755 "$ASSETS/fnos-fix-log-errors.sh" "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh"
     {
         echo "[Unit]"
-        echo "Description=fnOS(KICKPI K1): first-boot log-error fixes (EEE / masks / webdav)"
+        echo "Description=fnOS(KICKPI K1): first-boot log-error fixes (masks / webdav / cma)"
         echo "After=multi-user.target"
         echo "ConditionPathExists=!/var/lib/fnos-fix-log-errors.done"
         echo ""
@@ -579,23 +549,16 @@ WRAP
 
     # 自证：缺任何一项都算构建失败（只看“文件存在”不算 —— mask 必须是指向 /dev/null 的软链）
     [[ -x "$OSFIX/usr/local/sbin/k1-collect-boot-logs.sh" ]] || fail "日志收集脚本未就位"
-    # EEE 关闭修复件自证（关不掉 EEE = 链路间歇 Down 会复发，按仓库惯例 fail 而非静默）
-    [[ -x "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" ]] || fail "EEE 关闭脚本未就位"
-    sh -n "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "kickpi-k1-eee-off.sh 语法错误"
-    grep -q -- '--set-eee' "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "EEE 脚本缺 --set-eee"
-    grep -q 'eee off' "$OSFIX/usr/local/sbin/kickpi-k1-eee-off.sh" || fail "EEE 脚本缺 'eee off'"
+    # EEE 反向自证（与官方默认一致：镜像里不得出现任何 EEE 关闭件）
+    for f in usr/local/sbin/kickpi-k1-eee-off.sh \
+             etc/systemd/system/kickpi-k1-eee-off.service \
+             etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off; do
+        [[ -e "$OSFIX/$f" ]] && fail "镜像里仍有 EEE 关闭件: $f（与官方默认不一致）"
+    done
     [[ -L "$OSFIX/etc/systemd/system/multi-user.target.wants/kickpi-k1-eee-off.service" ]] \
-        || fail "kickpi-k1-eee-off.service 未启用（multi-user wants 缺链）"
-    grep -q 'ExecStart=/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh' \
-        "$OSFIX/etc/systemd/system/kickpi-k1-eee-off.service" \
-        || fail "kickpi-k1-eee-off.service ExecStart 不符"
+        && fail "EEE 关闭服务仍被 enable"
     [[ -x "$OSFIX/usr/sbin/ethtool" || -x "$OSFIX/usr/bin/ethtool" ]] \
-        || fail "镜像缺 ethtool（EEE 关闭服务会起不来）"
-    # EEE dispatcher 自证（第二层：接口 up 后重关 EEE；实机证明只开机关一次守不住）
-    [[ -x "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off" ]] \
-        || fail "EEE dispatcher 未就位（EEE 会随重新协商被打开）"
-    grep -q 'set-eee\|kickpi-k1-eee-off.sh' "$OSFIX/etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off" \
-        || fail "EEE dispatcher 内容不符（未调用关闭脚本）"
+        || echo "  · 提示：镜像无 ethtool（不影响功能，仅现场取证不便）"
     # 存量系统在线修复件 + 首启自愈单元自证
     [[ -x "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh" ]] || fail "存量系统修复件未就位"
     bash -n "$OSFIX/usr/local/sbin/fnos-fix-log-errors.sh" || fail "fnos-fix-log-errors.sh 语法错误"

@@ -4,7 +4,7 @@
 
 > **📌 移植总指南（下次适配照此走）→ [PORTING.md](PORTING.md)**：全流程清单、
 > 十一条坑总表、**网口五层坑的完整修复（DT 复位归属 / PHY 驱动 / vermagic / 加载顺序 / GMAC4 MDC 时钟）**、
-> **坑⑦ EEE/LPI 间歇掉线（2026-10-13 实机定案：全口 `ethtool --set-eee eee off`，两仓同修）**、
+> **坑⑦ EEE/LPI（~~2026-10-13 全口关 EEE~~ → 2026-10-17 改判：按官方默认保持开启，不再关闭）**、
 > 启动链、验收判据。
 >
 > **踩坑与修复全记录 → [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**（2026-10-12：
@@ -73,13 +73,16 @@ PHY 与 queue0 干净 / 无 `realtek,` / 四延迟），以及仓库静态门禁
 用户态侧：禁用残留的 `networking.service`(ifupdown，本镜像由 NM 管网)、
 摘掉每开机 `Bad address` 的 `rga3`（有 OF 表，仍由 udev 别名加载），保证 `systemd-modules-load` 不再开机失败。
 
-**坑⑦（2026-10-13 追加）——EEE 省电态导致的间歇掉线**：以上五条修的是"起不来/绑不上"，
-而系统正常跑起来之后还会整口 `Link is Down`（用网高峰 34 次/3h、深夜几乎不掉、两端 CRC=0）：
-根因是 EEE/LPI 省电态唤醒时序在 RK3568 dwmac + Maxio PHY 上翻车（对端 `phy_eee_wakeup_error_n=8126`）。
-修复 = `assets/kickpi-k1-eee-off.sh` 开机全口 `ethtool --set-eee … eee off` + `power/control=on`
-（`kickpi-k1-eee-off.service`，构建自证 + 静态门禁）。判据与完整取证见
-[PORTING.md §3.8](PORTING.md) 与 [TROUBLESHOOTING.md §6b](TROUBLESHOOTING.md)。
+**坑⑦（2026-10-13 追加，2026-10-17 改判）——EEE 省电态**：当年按"整口 Link Down（高峰 34 次/3h、
+深夜不掉、两端 CRC=0）+ 对端 `phy_eee_wakeup_error_n=8126`"判为 EEE/LPI 唤醒时序问题，
+装了脚本 + 开机服务 + NM dispatcher 三层关闭件。
 
+**2026-10-17 在 T68M 主路由上按日志复核推翻**：EEE 本来就处于关闭态时掉线照样发生；141 次 Link Down
+每一次都伴随对端 1–5 s 内重新 DHCP（对端在重启），且 20 s 空档不符合本端自协商时长。
+⇒ 本仓**不再关 EEE**：镜像里不得出现 `kickpi-k1-eee-off.sh` / 服务 / dispatcher（CI 反向门禁），
+存量系统用 `assets/fnos-fix-log-errors.sh` 会把历史三层件清掉。若将来真抓到 `phy_eee_wakeup_error_n`
+增长并伴随掉线，走 DT 的 `eee-broken-1000t`（唯一有内核依据的关法）。历史取证见
+[TROUBLESHOOTING.md §6b](TROUBLESHOOTING.md)。
 **验收只看具名日志门**（`modules/src/BUILD-RECIPE.md` 底部）：0 × MDIO 注册失败、0 × probe 失败、
 `end0/end1` 驱动 `rk_gmac-dwmac`、`phy_id=0x7b744411`、0 × `Failed to reset the dma`、`Link is Up`。
 

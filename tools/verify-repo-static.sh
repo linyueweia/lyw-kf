@@ -27,25 +27,14 @@ for d in "${SCAN_DIRS[@]}"; do
 done
 [[ $FAIL -eq 0 ]] && echo "  ✓ 未发现 eMMC 劫持路径/厂商 PARTUUID"
 
-# EEE 关闭修复件静态门禁（2026-10-13 实机定案：LPI 唤醒失败 → 链路间歇 Down，
-# 判据 phy_eee_wakeup_error_n=8126 + 高峰 34 次/3h Link Down + 两端 CRC=0。
-# 曾被 lyw-OS 线当废案删除并断言"必须不存在"，实机证据翻案重装——两仓不许再丢）
-if grep -q 'kickpi-k1-eee-off' build-k1-fnos.sh 2>/dev/null \
-   && [[ -f assets/kickpi-k1-eee-off.sh ]] \
-   && grep -q -- '--set-eee' assets/kickpi-k1-eee-off.sh 2>/dev/null; then
-    echo "  ✓ EEE 关闭修复件在位（build-k1-fnos.sh 注入 + assets 脚本 + --set-eee）"
+# EEE 反向门禁（2026-10-17 改判）：EEE 按官方默认保持开启 ——
+# 构建脚本与 assets 里都不得再出现 EEE 关闭件，且不得往镜像注入关闭服务/dispatcher。
+if grep -q "kickpi-k1-eee-off" build-k1-fnos.sh 2>/dev/null \
+   || [[ -f assets/kickpi-k1-eee-off.sh ]] \
+   || [[ -f assets/kickpi-k1-eee-dispatcher ]]; then
+    echo "  ✗ 仍存在 EEE 关闭件（kickpi-k1-eee-off / dispatcher）—— 与官方默认不一致"; FAIL=1
 else
-    echo "  ✗ EEE 关闭修复件缺失（kickpi-k1-eee-off：build 注入/assets 脚本被删）"; FAIL=1
-fi
-
-# EEE 第二层（dispatcher）：实机证明"只在开机关一次"守不住 —— 运行中的飞牛
-# net-nosleep.service=enabled+active 而 ethtool --show-eee 仍是 enabled（2026-10-14 取证）。
-if [[ -f assets/kickpi-k1-eee-dispatcher ]] \
-   && grep -q 'dispatcher.d/90-kickpi-k1-eee-off' build-k1-fnos.sh 2>/dev/null \
-   && grep -q 'kickpi-k1-eee-off.sh' assets/kickpi-k1-eee-dispatcher; then
-    echo "  ✓ EEE dispatcher 在位（接口 up 后重关 EEE）"
-else
-    echo "  ✗ EEE dispatcher 缺失（EEE 会随重新协商被打开 → 掉线复发）"; FAIL=1
+    echo "  ✓ 无 EEE 关闭件（按官方默认保持开启）"
 fi
 
 # 存量系统在线修复件（不必重刷镜像）+ 首启自愈单元

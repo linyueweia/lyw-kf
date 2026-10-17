@@ -7,9 +7,9 @@
 #
 # 依据（2026-10-13/14 实机日志取证，/root/fnos-logs-* 与桌面导出包）：
 #   真故障：
-#     1) 网口 EEE 被重新打开 —— `ethtool --show-eee end0/end1` = enabled，
-#        而 net-nosleep.service 已 enabled+active（它只管 power/control，不管 EEE）。
-#        → 装三层持久件（脚本 + 开机服务 + NM dispatcher），判据：全部 disabled。
+#     1) 网口 EEE —— 2026-10-17 改判：不再关闭（当初的"EEE 开着 = 掉线"依据已被主路由
+#        日志复核推翻：EEE 本就关闭时掉线仍发生，且每次都对应对端重启）。本脚本改为
+#        清除历史遗留的三层 EEE 关闭件，按官方默认保持开启。
 #     2) exim4.service failed —— 未配置的 MTA，日志目录都打不开
 #        （Cannot open main log file "/var/log/exim4/mainlog": Permission denied）。
 #        本仓决策 = mask（见 build-k1-fnos.sh (3) 段：exim4 = 未配置）。
@@ -45,90 +45,24 @@ for n in end0 end1 eth0 eth1; do
 done
 ok "已备份（含修复前 failed 单元与 EEE 状态）"
 
-# ── 1) EEE/LPI 三层持久化 ────────────────────────────────────────────────
-say "1) 关掉所有网口 EEE/LPI（脚本 + 开机服务 + NM dispatcher）"
-cat > /usr/local/sbin/kickpi-k1-eee-off.sh <<'EOF'
-#!/bin/sh
-# KICKPI K1：关闭所有真实网卡的 EEE/LPI 省电，并把运行时电源管理钉为 on。
-# 为什么：EEE 唤醒时序在本板 RK3568 dwmac + Maxio MAE0621A 上翻车 → 整口间歇 Link Down
-# （实机判据：对端 phy_eee_wakeup_error_n=8126、LPI 进出 7800 万次；关上后掉线归零）。
-# 幂等：可反复执行（开机一次 + 每次接口 up 一次 + 人工随时跑）。
-ETHTOOL="$(command -v ethtool 2>/dev/null || echo /usr/sbin/ethtool)"
-[ -x "$ETHTOOL" ] || { echo "kickpi-k1-eee-off: ethtool missing"; exit 1; }
-attempt=0
-while [ "$attempt" -lt 15 ]; do
-	attempt=$((attempt + 1))
-	pending=0
-	for d in /sys/class/net/*; do
-		[ -e "$d" ] || continue
-		nic=${d##*/}
-		case "$nic" in
-			lo|docker*|veth*|br-*|virbr*|wg*|tailscale*|tun*|p2p*) continue ;;
-		esac
-		if ! "$ETHTOOL" --set-eee "$nic" eee off 2>/dev/null; then
-			if "$ETHTOOL" --show-eee "$nic" >/dev/null 2>&1; then pending=1; fi
-		fi
-		pm="$d/device/power/control"
-		if [ -w "$pm" ]; then echo on > "$pm" 2>/dev/null || true; fi
-	done
-	[ "$pending" -eq 0 ] && break
-	sleep 2
+# ── 1) EEE：不再关闭（2026-10-17 改判）+ 清除历史关闭件 ──────────────────
+say "1) EEE 保持官方默认；清除历史遗留的三层关闭件"
+for f in /usr/local/sbin/kickpi-k1-eee-off.sh \
+         /etc/systemd/system/kickpi-k1-eee-off.service \
+         /etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off; do
+	if [ -e "$f" ]; then rm -f "$f"; echo "  · 已删除历史 EEE 关闭件: $f"; fi
 done
-echo "kickpi-k1-eee-off: done (attempt=$attempt)"
-exit 0
-EOF
-chmod 0755 /usr/local/sbin/kickpi-k1-eee-off.sh
-
-cat > /etc/systemd/system/kickpi-k1-eee-off.service <<'EOF'
-[Unit]
-Description=fnOS(KICKPI K1): disable NIC EEE/LPI (link-stability fix)
-After=NetworkManager.service network-online.target
-Wants=network-online.target
-ConditionPathExists=/usr/local/sbin/kickpi-k1-eee-off.sh
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh
-TimeoutStartSec=60
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-mkdir -p /etc/NetworkManager/dispatcher.d
-cat > /etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off <<'EOF'
-#!/bin/sh
-# NM 每次接口状态变化都调一次：EEE 会随重新协商被打开，只在开机关一次守不住。
-IFACE="$1"
-ACTION="$2"
-case "$ACTION" in
-	up|dhcp4-change|dhcp6-change|connectivity-change) ;;
-	*) exit 0 ;;
-esac
-[ -x /usr/local/sbin/kickpi-k1-eee-off.sh ] || exit 0
-( /bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh >>/var/log/kickpi-k1-eee-off.log 2>&1 & ) >/dev/null 2>&1
-exit 0
-EOF
-chmod 0755 /etc/NetworkManager/dispatcher.d/90-kickpi-k1-eee-off
-
-systemctl daemon-reload
-systemctl enable --now kickpi-k1-eee-off.service >/dev/null 2>&1
-/bin/sh /usr/local/sbin/kickpi-k1-eee-off.sh
-sleep 1
-eee_fail=0
+systemctl disable kickpi-k1-eee-off.service >/dev/null 2>&1 || true
+systemctl daemon-reload >/dev/null 2>&1 || true
 for n in /sys/class/net/*; do
 	[ -e "$n" ] || continue
 	nic=${n##*/}
 	case "$nic" in lo|docker*|veth*|br-*|virbr*|wg*) continue ;; esac
-	st=$(ethtool --show-eee "$nic" 2>/dev/null | awk -F': ' '/^EEE status/{print $2}')
+	st=$(ethtool --show-eee "$nic" 2>/dev/null | awk -F": " "/^EEE status/{print \$2}")
 	[ -z "$st" ] && continue
-	printf '  %-6s EEE=%s\n' "$nic" "$st"
-	[ "$st" = "disabled" ] || eee_fail=1
+	printf "  %-6s EEE=%s（不干预）\n" "$nic" "$st"
 done
-[ "$eee_fail" = 0 ] && ok "所有支持 EEE 的网口均 disabled（判据达标）" \
-                    || bad "仍有网口 EEE 未关（见上表）"
-
+ok "EEE 未做任何关闭（历史件已清；按官方默认保持开启）"
 # ── 2) mask 本板无对应硬件/未配置的厂商单元（与本仓 build-k1-fnos.sh (3) 段同决策）──
 say "2) mask 厂商残留单元（exim4/pwm-fancontrol/nut-*/smartmontools/networking）"
 masked=""
@@ -217,7 +151,7 @@ echo "  --- 本轮 err 级计数 ---"
 printf '  %s 条\n' "$(journalctl -b -p err --no-pager 2>/dev/null | wc -l)"
 echo
 echo "  备份目录：$BK"
-echo "  注意：mask 与 EEE 持久件均已落盘，重启后仍生效；无需立即重启。"
+echo "  注意：mask 单元与 EEE 清理已落盘，重启后仍生效；无需立即重启。"
 
 # ── 附：良性噪声白名单（**不要改**）────────────────────────────────────
 #   · MDIO device at address 1 is missing        —— 第二网口占位节点，正常
