@@ -544,6 +544,59 @@ wdctl | head -6                           # 期望：Device /dev/watchdog0, Time
 
 ---
 
+## 6f. 浏览相册视频即整机挂死（转码 → mpp 共享复位死锁）实测定案 · 2026-10-19
+
+### 现象
+fnOS 相册播放/预览视频（尤其 `IMG_*_1.MOV` 高帧率 iPhone 片）数秒后：内核 `mpp_rkvdec2` 连环
+`session N task M timeout → resetting...`，末段 `rk_vcodec: timing: irq : invalid`（解码硬件收不到
+完成中断），随后整机半死（ping 断续、22/5666 全无），最终靠硬件看门狗硬复位自愈
+（`wdctl` 实测超时 44s、守护设 89s；10-19 当日 3 次：09:2x / 14:47 / 15:47，14:47 那次用户先行断电）。
+面板同时报「转码服务异常」。
+
+### 时间线与引爆点
+- 10-18 11:04 官方源更新：内核 c951→c1145 + trim 1.2.0302→1.2.0701（媒体驱动模块
+  `updates/trim/rk_vcodec/rk_vcodec.ko` 为 Sep 23 构建，of_match 按官方设备 DTB 形态写）。
+- 322 天老内核日志 `resetting|force_dequeue` 计数 = 0；更新后首次播视频（10-19 09:2x）即起病。
+
+### 根因（三处移植 DTB 与官方 RK3568 设备不一致，被新模块引爆）
+对照物＝同内核包官方设备 DTB（`rk3568-nanopi-r5s` / `rk3568-easepi-r1`，逐节点 diff）：
+1. **5 个 IOMMU 节点只写孤串 `rockchip,iommu-v2`**：本内核（未压缩 Image strings 实测
+   `rockchip,rk3568-iommu` 1 次 / `rockchip,iommu-v2` 0 次）不认 → SMMU 控制器不注册 → 实测
+   `mpp_rkvenc/mpp-iep2/mpp_jpgdec: failed to attach iommu`（编码器/iep/jpegd 全断 SMMU）。
+   官方所有设备写双串 `"rockchip,rk3568-iommu","rockchip,iommu-v2"`。
+2. **第二编码器节点错名**：我们 `compatible = "rockchip,rk3568-vepu"`（rk_vcodec.ko 全库 0 命中
+   ＝死节点）；官方 `rockchip,vpu-encoder-v2` 才被 of_match 认领。
+3. **rkvdec/rkvenc 挂 OPP 压频**：官方无 OPP 链接，rkvdec 带 `rockchip,disable-auto-freq` 且
+   `assigned-clock-rates = 396/396/396/600`；我们 OPP 把解码核实测压到 240/250MHz、
+   `clk_hevc_cabac` 297（官方 normal 表要求 600）。
+后果链：转码＝解＋编；编码侧残缺单元一进共享 `mpp-srv`（taskqueue/resetgroup=6）的复位机制即锁死，
+解码任务全部收不到 IRQ → timeout 风暴 → 整机挂死（看门狗拉回）。
+
+### 修复（设备与仓同源，2026-10-19 实机验证通过）
+- `dts/rk3568-kickpi-k1.dts`：① 全部 iommu compatible 对齐官方双串（仅 `fe043e00` 保持单串＝官方同款）
+  ② `fdee0000` → `rockchip,vpu-encoder-v2` + `rockchip,disable-auto-freq`（节点名保留，
+  `__symbols__` 的 `vepu = /video-codec@fdee0000` 引用不动）③ rkvdec 锁频 396/396/396/600 +
+  `disable-auto-freq`、去 OPP 链接；rkvenc 去 OPP 链接。
+- 门禁：新增 `tools/verify-k1-media-dts.sh`（MEDIA-DTS GATE），由 `verify-repo-static.sh` 调用进 CI；
+  断言＝三类对齐 + 媒体单元齐全 + 反断言（不得回退成 `rk3568-vepu` / 孤串 `iommu-v2` / OPP 链接）。
+
+### 验收（2026-10-19 16:3x，全部实测）
+- 门禁 14/14 OK；`dist` DTB 与 dts 源现编逐字节一致（`6854cd18…`，151780 B）。
+- 重启后：`/sys/class/iommu` 4→8（三家断链全绑）、`failed to attach iommu` 3→0、
+  `mpp_vepu2 fdee0000.video-codec: probing finish`、rkvdec 实测 `clk_rkvdec_hevc_ca=600MHz`、`storm=0`。
+- 硬解隔离：`ffmpeg hevc_rkmpp` 全片解码 `EXIT=0`；`hevc_rkmpp → h264_rkmpp` 全硬链路 `EXIT=0`、STORM=0。
+- 用户最终验收：相册连播多支视频流畅、无花屏、无「转码服务异常」；同窗口 mediasrv 处理问题片 14 次、
+  `storm=0` 全程、机器零波动。
+
+### 复发判据 / 回滚 / 残留观察
+- 复发判据：`journalctl -k -b | grep -c 'resetting\.\.\.'` 非 0 或面板再报转码异常＝红；门禁三类断言任一
+  回退必须 CI 红。
+- 回滚链（设备 `/root/dtb-rollback-20261019/`）：`.pre-clock-align`(9441b09e 原始) →
+  `.pre-iommu-vepu-fix`(77e6a0cb 时钟层) → 当前(6854cd18 全量对齐)。
+- 残留观察（不阻塞）：`mpp_platform: client 1/3 driver is not ready`（client 18 已消失）、
+  `sram@fdcc0000` 子节点多一个 `pool;`（官方无；驱动实测读 sram 正常）、rkvenc/rkvdec probe 的
+  `failed to init opp info`（＝官方同款"无 OPP"形态的预期噪音）。
+
 ## 7. 验收清单（每次改动后照做）
 
 1. `bash -n build-k1-fnos.sh verify-fnos-bootchain.sh` + `python -m py_compile tools/*.py`

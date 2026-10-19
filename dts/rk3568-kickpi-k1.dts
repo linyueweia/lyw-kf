@@ -902,7 +902,7 @@
 		status = "okay";};
 
 	iommu@fdea0800 {
-		compatible = "rockchip,rk3568-iommu";
+		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdea0800 0x00 0x40>;
 		interrupts = <0x00 0x8a 0x04>;
 		clock-names = "aclk\0iface";
@@ -927,7 +927,7 @@
 		reg = <0x00 0xfdeb0000 0x00 0x1000>;};
 
 	video-codec@fdee0000 {
-		compatible = "rockchip,rk3568-vepu";
+		compatible = "rockchip,vpu-encoder-v2";
 		phandle = <0x103>;
 	
 		status = "okay";
@@ -941,10 +941,11 @@
 		rockchip,taskqueue-node = <0x02>;
 		rockchip,resetgroup-node = <0x02>;
 		reg = <0x00 0xfdee0000 0x00 0x400>;
+		rockchip,disable-auto-freq;
 		reset-names = "video_a", "video_h";};
 
 	iommu@fdee0800 {
-		compatible = "rockchip,rk3568-iommu";
+		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdee0800 0x00 0x40>;
 		interrupts = <0x00 0x3f 0x04>;
 		clocks = <0x0f 0xfd 0x0f 0xfe>;
@@ -960,7 +961,7 @@
 	// （rockchip-vdec.ko 只认 rockchip,rk3399-vdec、rk_vcodec 里没有该字符串、builtin 无）。
 	// 唯一引用是 __symbols__ 里的 vdec 条目，已一并删除 → 无悬空 phandle。
 	iommu@fdf80800 {
-		compatible = "rockchip,rk3568-iommu";
+		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdf80800 0x00 0x40 0x00 0xfdf80840 0x00 0x40>;
 		interrupts = <0x00 0x5c 0x04>;
 		clocks = <0x0f 0x108 0x0f 0x109>;
@@ -1004,7 +1005,7 @@
 	};
 
 	iommu@fdfe0800 {
-		compatible = "rockchip,rk3568-iommu";
+		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdfe0800 0x00 0x100>;
 		interrupts = <0x00 0x92 0x04>;
 		clocks = <0x0f 0xce 0x0f 0xcf>;
@@ -6473,7 +6474,7 @@
 	interrupts = <0x00 0x97 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0x28 &{/clock-controller@fdd20000} 0x29>;
 	#iommu-cells = <0x00>;
-	compatible = "rockchip,iommu-v2";
+	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 	/* ★2026-10-12 NPU 彻查结论（三层根因之一，实测修复）：
 	   okay 时的故障链：本 iommu 的 power-domains=npu 域 → 飞牛 6.18 的
 	   rockchip-pm-domain 在冷启动给 npu 域 pwrup 时 idle 握手过不去
@@ -6498,7 +6499,7 @@
 	interrupts = <0x00 0x3d 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0xfb &{/clock-controller@fdd20000} 0xfc>;
 	#iommu-cells = <0x00>;
-	compatible = "rockchip,iommu-v2";
+	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 	status = "okay";
 	interrupt-names = "jpegd_mmu";
 	reg = <0x00 0xfded0480 0x00 0x40>;
@@ -6509,7 +6510,7 @@
 	interrupts = <0x00 0x38 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0xf6 &{/clock-controller@fdd20000} 0xf7>;
 	#iommu-cells = <0x00>;
-	compatible = "rockchip,iommu-v2";
+	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 	status = "okay";
 	interrupt-names = "iep_mmu";
 	reg = <0x00 0xfdef0800 0x00 0x100>;
@@ -6521,7 +6522,7 @@
 	clocks = <&{/clock-controller@fdd20000} 0x103 &{/clock-controller@fdd20000} 0x104>;
 	rockchip,enable-cmd-retry;
 	#iommu-cells = <0x00>;
-	compatible = "rockchip,iommu-v2";
+	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 	rockchip,disable-mmu-reset;
 	status = "okay";
 	interrupt-names = "rkvenc_mmu0", "rkvenc_mmu1";
@@ -6533,7 +6534,7 @@
 	interrupts = <0x00 0x3b 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0xd2 &{/clock-controller@fdd20000} 0xd3>;
 	#iommu-cells = <0x00>;
-	compatible = "rockchip,iommu-v2";
+	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 	rockchip,disable-mmu-reset;
 	status = "okay";
 	interrupt-names = "isp_mmu";
@@ -7031,7 +7032,12 @@
 	assigned-clocks = <&{/clock-controller@fdd20000} 0x108 &{/clock-controller@fdd20000} 0x10a &{/clock-controller@fdd20000} 0x10b &{/clock-controller@fdd20000} 0x10c>;
 	rockchip,task-capacity = <0x10>;
 	rockchip,normal-rates = <0x11b3dc40 0x00 0x11b3dc40 0x11b3dc40 0x23c34600>;
-	assigned-clock-rates = <0x11b3dc40 0x11b3dc40 0x11b3dc40 0x11b3dc40>;
+	// 2026-10-19 对齐 fnOS 官方 c1145 RK3568 DTB 基线（easepi-r1 实测）：
+	// 官方 rkvdec 锁频 396/396/396/600 + disable-auto-freq、不挂 OPP；
+	// 本仓旧值 297×4 + OPP 链接把解码核压到实测 240/250/250MHz，
+	// c1145 内核下每个任务都 timeout → resetting 风暴 → 整机死锁（转码必死机）。
+	assigned-clock-rates = <0x179a7b00 0x179a7b00 0x179a7b00 0x23c34600>;
+	rockchip,disable-auto-freq;
 	resets = <&{/clock-controller@fdd20000} 0x142 &{/clock-controller@fdd20000} 0x143 &{/clock-controller@fdd20000} 0x144 &{/clock-controller@fdd20000} 0x145 &{/clock-controller@fdd20000} 0x146>;
 	interrupts = <0x00 0x5b 0x04>;
 	clocks = <&{/clock-controller@fdd20000} 0x108 &{/clock-controller@fdd20000} 0x109 &{/clock-controller@fdd20000} 0x10a &{/clock-controller@fdd20000} 0x10b &{/clock-controller@fdd20000} 0x10c>;
@@ -7043,7 +7049,7 @@
 	rockchip,rcb-iova = <0x10000000 0x10000>;
 	reg = <0x00 0xfdf80200 0x00 0x400 0x00 0xfdf80100 0x00 0x100>;
 	reset-names = "video_a", "video_h", "video_cabac", "video_core", "video_hevc_cabac";
-	operating-points-v2 = <&{/rkvdec-opp-table}>;
+	// OPP 链接已移除（对齐官方：视频单元不挂 OPP，改由 assigned-clock-rates + disable-auto-freq 锁频）
 	vdec-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG1}>;
 	rockchip,sram = <&{/sram@fdcc0000/rkvdec-sram@0}>;
 	rockchip,default-max-load = <0x1fe000>;};
@@ -7089,7 +7095,8 @@
 	interrupt-names = "irq_enc";
 	reg = <0x00 0xfdf40000 0x00 0x400>;
 	reset-names = "video_a", "video_h", "video_core";
-	operating-points-v2 = <&{/rkvenc-opp-table}>;};
+	// OPP 链接已移除（对齐官方：rkvenc 不挂 OPP，走 mpp normal-rates）
+};
 	rockchip-system-monitor {
 	rockchip,thermal-zone = "soc-thermal";
 	compatible = "rockchip,system-monitor";

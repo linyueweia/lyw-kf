@@ -181,10 +181,10 @@ jobs:
             echo "将注入 modules/ 下的 .ko（脚本会做 vermagic 硬闸，不匹配则失败）"
           fi
 
-      - name: Repo static gates (eMMC 劫持 / DTB 同步 / 网口 DT 门禁)
+      - name: Repo static gates (eMMC 劫持 / DTB 同步 / 网口+媒体 DT 门禁)
         run: |
           set -e
-          chmod +x tools/verify-repo-static.sh tools/verify-k1-net-dts.sh
+          chmod +x tools/verify-repo-static.sh tools/verify-k1-net-dts.sh tools/verify-k1-media-dts.sh
           bash tools/verify-repo-static.sh
 
       - name: Assemble fnOS image

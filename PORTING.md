@@ -17,7 +17,8 @@
 3. **u-boot**：**不要自编**。恒用基镜像自带（v1.23 与本板 eMMC 原厂同哈希；自建 v1.26 SPL 阶段即断）。
 4. **装配**：`build-k1-fnos.sh`（基镜像 + DTB + 模块 + 固件），引导走官方 boot.scr `part uuid`。
 5. **板级模块**：maxio（网口 PHY，硬依赖）按基镜像 header 现编 + 三层自愈；WiFi 用官方内核自带三件套。
-6. **门禁**：本地跑 `tools/verify-repo-static.sh` + `verify-k1-net-dts.sh` 再推；CI 全绿才算完。
+6. **门禁**：本地跑 `tools/verify-repo-static.sh`（内含 `verify-k1-net-dts.sh` 网口门禁 +
+   `verify-k1-media-dts.sh` 媒体门禁）再推；CI 全绿才算完。
 7. **验收**：§9 清单逐项打勾（含在线更新自愈实测）。
 
 ---

@@ -60,6 +60,15 @@ else
     echo "  ✗ dist/rk3568-kickpi-k1.dtb 缺失"; FAIL=1
 fi
 
+# 媒体层 DT 门禁（2026-10-19 转码死机事故防回归；判据=官方 fnOS RK3568 设备 DTB 对照）
+if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
+    if bash tools/verify-k1-media-dts.sh dist/rk3568-kickpi-k1.dtb >/tmp/_rs_media.log 2>&1; then
+        echo "  ✓ 媒体 DT 门禁 ALL PASS（dist DTB）"
+    else
+        echo "  ✗ 媒体 DT 门禁 FAIL（dist DTB）"; tail -20 /tmp/_rs_media.log | sed 's/^/     /'; FAIL=1
+    fi
+fi
+
 # dist DTB 必须由 dts/ 源现编得出（防改了源忘了重编 DTB）
 if [[ -f dts/rk3568-kickpi-k1.dts && -f dist/rk3568-kickpi-k1.dtb ]]; then
     T="$(mktemp -d)"
