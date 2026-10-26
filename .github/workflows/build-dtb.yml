@@ -1,0 +1,56 @@
+name: Build DTB only (lyw-kf)
+
+# 只编 DTB 并回传产物：本机没有 dtc 时，用它产出 dist/*.dtb 再提交，
+# 保证 dist 永远与 dts 源一致（仓库静态门禁会逐字节比对，不允许漂移）。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'dts/**'
+      - 'build-dtb.sh'
+      - 'tools/dtb-soc-consistency.py'
+      - '.github/workflows/build-dtb.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  dtb:
+    name: Build DTB (fnOS kernel tree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+
+      - name: Build DTB in fnOS kernel tree + SoC consistency gate
+        run: |
+          set -e
+          bash build-dtb.sh
+          ls -la dist/
+          sha256sum dist/*.dtb
+
+      - name: Upload DTB
+        uses: actions/upload-artifact@v4
+        with:
+          name: k1-dtb
+          path: dist/*.dtb
+          if-no-files-found: error
+
+      - name: Commit rebuilt DTB if changed
+        run: |
+          set -e
+          if git diff --quiet -- dist/; then
+            echo "dist 与提交件一致，无需回提交"
+            exit 0
+          fi
+          NEW=$(sha256sum dist/*.dtb | awk '{print $1}')
+          git config user.name  "hermes-dtb-bot"
+          git config user.email "dtb-bot@users.noreply.github.com"
+          git add dist/
+          git commit -m "chore(dtb): 由 dts 源重编 dist（sha256 ${NEW:0:16}…）" -m "自动提交：dts/ 改动后必须重编 DTB，dist 与源逐字节一致是仓库静态门禁的前提。"
+          git push
+          echo "已回提交新 DTB: $NEW"
