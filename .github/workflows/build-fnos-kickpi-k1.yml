@@ -106,17 +106,21 @@ jobs:
           grep " ${ASSET}$" base/SHA256SUMS | (cd base && sha256sum -c -)
           echo "  ✓ gz 校验通过（$TAG）"
           EXPECT_SHA="${{ inputs.base_image_sha256 || '' }}"
-          gunzip -c "base/$ASSET" > base/fnnas-base.img
+          # 解压成正式文件名（SHA256SUMS 里 raw 行的名字），校验过后再改名给下游用
+          RAW_NAME="fnnas-official-arm64-image_rockchip.img"
+          gunzip -c "base/$ASSET" > "base/$RAW_NAME"
           rm -f "base/$ASSET"
-          RAW_GOT="$(sha256sum base/fnnas-base.img | awk '{print $1}')"
-          RAW_LINE="$(grep ' fnnas-official-arm64-image_rockchip.img$' base/SHA256SUMS || true)"
+          RAW_LINE="$(grep " ${RAW_NAME}$" base/SHA256SUMS || true)"
           if [[ -n "$RAW_LINE" ]]; then
             echo "$RAW_LINE" | (cd base && sha256sum -c -) || { echo "::error::raw 与 SHA256SUMS 不符"; exit 1; }
-            echo "  ✓ raw 校验通过 $RAW_GOT"
+            echo "  ✓ raw 校验通过"
           fi
+          EXPECT_SHA="${{ inputs.base_image_sha256 || '' }}"
+          RAW_GOT="$(sha256sum "base/$RAW_NAME" | awk '{print $1}')"
           if [[ -n "$EXPECT_SHA" && "$RAW_GOT" != "$EXPECT_SHA" ]]; then
             echo "::error::raw sha256 与显式输入不符：期望 $EXPECT_SHA 实得 $RAW_GOT"; exit 1
           fi
+          mv "base/$RAW_NAME" base/fnnas-base.img
           sudo parted -s base/fnnas-base.img unit s print || true
       - name: Report boot material (DTB / modules，构建前清单)
         run: |
