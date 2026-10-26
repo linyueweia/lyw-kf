@@ -181,6 +181,32 @@ jobs:
           chmod +x tools/verify-repo-static.sh tools/verify-k1-net-dts.sh tools/verify-k1-media-dts.sh
           bash tools/verify-repo-static.sh
 
+      - name: Rebuild DTB from dts/（防漂移 + 节点自检）
+        run: |
+          set -e
+          echo "dtc: $(dtc --version 2>&1 | head -1)"
+          dtc -I dts -O dtb -o /tmp/k1-fresh.dtb dts/rk3568-kickpi-k1.dts 2>/tmp/dtc.err \
+            || { echo "✗ dtc 编译 dts 失败"; cat /tmp/dtc.err; exit 1; }
+          ls -la /tmp/k1-fresh.dtb
+          if cmp -s /tmp/k1-fresh.dtb dist/rk3568-kickpi-k1.dtb; then
+            echo "✓ dist DTB 与 dts 源逐字节一致（无漂移）"
+          else
+            echo "⚠ dist DTB 与 dts 源不一致 → 以 dts 源为准覆盖（提交件已漂移）"
+            stat -c '  旧: %n %s B' dist/rk3568-kickpi-k1.dtb
+            cp -f /tmp/k1-fresh.dtb dist/rk3568-kickpi-k1.dtb
+            stat -c '  新: %n %s B' dist/rk3568-kickpi-k1.dtb
+          fi
+          T=/tmp/k1-fresh.dts
+          dtc -I dtb -O dts /tmp/k1-fresh.dtb -o "$T" 2>/dev/null
+          fail() { echo "✗ DTB 自检失败: $1"; exit 1; }
+          grep -q 'kickpi,k1' "$T" || fail "compatible 不含 kickpi,k1"
+          grep -q 'model = "KICKPI K1"' "$T" || fail "model 不是 KICKPI K1"
+          grep -q 'rockchip,rk3568-iommu' "$T" || fail "iommu 不是 rk3568-iommu（内核 6.18 树口径）"
+          grep -q 'phy-mode = "rgmii"' "$T" || fail "双 gmac 必须 rgmii + 显式 tx/rx_delay（rgmii-id 在厂商 dwmac-rk 里延迟清零）"
+          grep -q 'eee-broken-1000t' "$T" || fail "缺 eee-broken-1000t（Maxio MAE0621A 协商 1G EEE 会打死 RX）"
+          grep -qE 'tx_delay|rx_delay' "$T" || fail "缺 tx/rx_delay"
+          echo "✓ DTB 节点自检通过（kickpi,k1 / rk3568-iommu / rgmii+delay / eee-broken-1000t）"
+
       - name: Assemble fnOS image
         run: |
           set -e
