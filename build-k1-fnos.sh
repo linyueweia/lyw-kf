@@ -143,6 +143,40 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$BOOT_MNT" "$ROOT_MNT"
+# ── U-Boot 注入（本板引导件）────────────────────────────────────────
+# 基镜像 v1.1.0 起前导区为零（3568/3588 无法共用一份 U-Boot）。
+# K1 用 uboot/k1-first32m.bin（= v1.0.0 基镜像前32MiB，板上同款 ddr-v1.23，
+# 与本板 eMMC 原厂同哈希）。注入只写 [17408, 32MiB) 载荷区，镜像 GPT 保留。
+# 基镜像若自带前导区（v1.0.0 回滚场景）则不注入、原样保留 —— 行为与历史版本一致。
+if [[ -n "${UBOOT:-}" ]]; then
+    [[ -f "$UBOOT" ]] || fail "UBOOT 文件不存在: $UBOOT"
+    [[ "$(stat -c%s "$UBOOT")" -eq 33554432 ]] || fail "UBOOT 必须是 32MiB 提取件"
+    python3 - "$IMG" "$UBOOT" <<'PYEOF'
+import sys, hashlib, struct
+img, ub = sys.argv[1], sys.argv[2]
+d0 = open(img, 'rb').read(32*1024*1024)
+if sum(1 for b in d0 if b) > 0:
+    print("  （基镜像前导区非零 —— 保留原样，不注入）")
+    sys.exit(0)
+u = open(ub, 'rb').read()
+with open(img, 'r+b') as f:
+    f.seek(17408)
+    f.write(u[17408:])
+d = open(img, 'rb').read(0x800010)
+assert d[0x8000:0x8004] == b'RKNS', "idbloader 魔数不对"
+assert d[0x800000:0x800004] == bytes.fromhex('d00dfeed'), "FIT 魔数不对"
+assert d[512:520] == b'EFI PART', "镜像 GPT 头丢失"
+f = open(img, 'rb'); f.seek(512); h = f.read(92)
+pl, = struct.unpack('<Q', h[72:80])
+f.seek(pl*512); e = f.read(128)
+s, = struct.unpack('<Q', e[32:40])
+assert s == 65536, f"p1 起始 LBA 变了: {s}"
+print("  ✓ U-Boot 注入断言通过（RKNS + FIT + GPT 保留 + p1@65536）")
+PYEOF
+    echo "  ✓ 已注入 K1 本板 U-Boot（载荷区 [17408,32MiB)）"
+else
+    echo "  （未传 UBOOT —— 前导区保持基镜像原样）"
+fi
 LOOP="$(losetup -fP --show "$IMG")"
 sleep 1
 BOOT_PART="${LOOP}p1"; ROOT_PART="${LOOP}p2"
