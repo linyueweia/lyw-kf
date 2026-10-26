@@ -55,6 +55,20 @@ fi
 strings /tmp/_fb_uboot.itb | grep -iE 'U-Boot 20[0-9]{2}\.' | head -2 | sed 's/^/       /'
 
 echo
+# u-boot 内置 boot_targets 必须是 mmc 优先（usb 在前 → 插着 USB 盘就起不来）
+if ( set +o pipefail; strings -a "$IMG" 2>/dev/null | head -c 40M | grep -q 'boot_targets=mmc1 mmc0' ); then
+    ok "u-boot boot_targets = mmc1 mmc0 …（mmc 优先，插 USB 盘不影响启动）"
+else
+    if ( set +o pipefail; strings -a "$IMG" | head -c 40M | grep -q 'boot_targets=usb mmc1 mmc0' ); then
+        bad "u-boot boot_targets 仍是 usb 优先 —— 插 USB 硬盘会抢在 mmc 前，机器起不来"
+    else
+        warn "未读到 u-boot 的 boot_targets 串（前导区可能被清零/待注入）"
+    fi
+fi
+# 内置 fdtfile 若是别板（r5s/easepi），必须由 fnEnv 覆盖 —— 这里只提示，真正的断言在环5
+( set +o pipefail; strings -a "$IMG" | head -c 40M | grep -qE 'fdtfile=rockchip/(rk3568-nanopi-r5s|rk3568-easepi)\.dtb' ) \
+    && warn "u-boot 内置 fdtfile 指向别板（rockchip/rk3568-nanopi-r5s|easepi）—— 依赖 p1/fnEnv.txt 覆盖，环5 已断言 fnEnv 指向本板 DTB"
+
 echo "── 环3/4/5/6：挂载镜像分区检查 ──"
 MNT_B=/mnt/_fb_boot; MNT_R=/mnt/_fb_root
 mkdir -p "$MNT_B" "$MNT_R"

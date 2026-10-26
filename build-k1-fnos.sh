@@ -91,8 +91,11 @@ echo "  ✓ $IMG ($(stat -c%s "$IMG") 字节)"
 
 # ── U-Boot 注入（本板引导件）────────────────────────────────────────
 # 基镜像 v1.1.0 起前导区为零（3568/3588 无法共用一份 U-Boot）。
-# K1 用 uboot/fnos-rk3568-first32m.bin（= 飞牛官方 RK3568 通用 U-Boot：U-Boot 2026.04-TRIM
-#   + ddr-v1.23-03ea844c5d，与 v1.0.0 基镜像前 32MiB 逐字节相同；2026-10-26 更名统一口径）
+# K1 用 uboot/k1-ki-first32m.bin —— 由【lyw-ki（K1 iStoreOS）仓库构建】的 U-Boot：
+#   U-Boot 2025.10-OpenWrt-r33609-283d02639c + ddr-v1.23-03ea844c5d（与本板 eMMC 原厂同版本）
+#   内置 boot_targets=mmc1 mmc0 nvme scsi usb …（本来就是 mmc 优先，无需就地改字节）
+#   内置 fdtfile=rockchip/rk3568-easepi.dtb（非本板，由 p1/fnEnv.txt 覆盖，官方机制）
+#   取法：gzip -dc istoreos-*-kickpi_k1-squashfs-sysupgrade.img.gz | head -c 32M
 # 原注释：
 # 与本板 eMMC 原厂同哈希）。注入只写 [17408, 32MiB) 载荷区，镜像 GPT 保留。
 # 基镜像若自带前导区（v1.0.0 回滚场景）则不注入、原样保留 —— 行为与历史版本一致。
@@ -136,18 +139,15 @@ dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_k1base_idb
 strings /tmp/_k1base_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /' || echo "       （无 DDR 串 —— 前导区待注入或已清零）"
 
 echo
-echo "==== 2b) 修正 U-Boot 内置默认 env 的 boot_targets（USB 优先 → mmc 优先）===="
-# 背景：基镜像自带的 armbian U-Boot（2026.04-TRIM-c218，内嵌 fdtfile=rk3568-nanopi-r5s.dtb）
-# 把 usb 排在 boot_targets 第一位：
-#     bootcmd=bootflow scan -lb
-#     boot_targets=usb mmc1 mmc0 nvme scsi pxe dhcp spi
-# bootflow scan 扫到第一个有效 bootflow 就立刻启动，于是"开机前插着 USB 硬盘"时会先去
-# 枚举 USB，在轮到 SD(mmc1) 之前卡住/被抢走 → 表现即"机器起不来"。
-# 对照本板 eMMC 的厂商 U-Boot 是 mmc1 mmc0 ... usb0（usb 在最后），可见 "USB 优先"
-# 是 armbian 补丁引入的、不是本板固有。
-# 修法：就地把 boot_targets 的值改成 mmc 优先。两串等长（各 36 字节），
-#       不改变 env 总长、NUL 终止位不动、无需重算 CRC。
-# 脚本自带硬断言：全盘必须恰好 1 处命中旧串，写完读回复核（旧串 0 处 / 新串 1 处 / 大小不变）。
+echo "==== 2b) 断言 U-Boot 内置默认 env 的 boot_targets 是 mmc 优先（必要时就地改写）===="
+# 历史背景：早期注入的是基镜像自带的 armbian U-Boot（2026.04-TRIM-c218），
+#   内置 boot_targets=usb mmc1 mmc0 … 且 fdtfile=rk3568-nanopi-r5s.dtb（别板）。
+#   bootflow scan 扫到第一个有效 bootflow 就启动 → 开机前插着 USB 盘会先枚举 USB，
+#   在轮到 SD/eMMC 之前卡住，表现就是"起不来"。
+# 现状：改用【lyw-ki 仓库构建】的 U-Boot（2025.10-OpenWrt），内置 boot_targets 本身就是
+#   mmc1 mmc0 nvme scsi usb …（mmc 优先），本步骤退化为"断言 + 必要时改写"：
+#   · 已是 mmc 优先 → patch 工具打印"已是新值"，不做任何写入（也就不需要重签 FIT）
+#   · 仍是 usb 优先 → 等长就地改写 36 字节 + 2c 重签 FIT（缺一不可，见 2c 的血泪史）
 if python3 "$(dirname "$0")/tools/patch-uboot-boot-targets.py" "$IMG"; then
     echo "  ✓ boot_targets 已为 mmc 优先"
 else
