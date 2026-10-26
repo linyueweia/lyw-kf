@@ -402,24 +402,28 @@ SOFTEOF
     ln -sf ../kickpi-k1-modules.service "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules.service"
     echo "  ✓ 已装 systemd 绝对路径加载单元（不依赖 depmod）"
 
-    # ── OTA 自愈：把 maxio 源码 + 开机重编单元装进 rootfs ──────────────────
-    # 为什么必须：maxio.ko 的 vermagic 绑定内核版本，飞牛 OTA 换内核后旧 .ko 加载不了，
-    # Maxio PHY 退回 generic PHY（灯/速率/RGMII 参考时钟都可能异常）。
-    # 设备上有 /lib/modules/<kver>/build（=linux-headers）+ gcc + make（实机确认），
-    # 所以换内核后可以现场重编。脚本只记录不阻塞开机，失败也只是降级。
+    # ── OTA 自愈：4 个树外模块（maxio + SWT6621S 三件）随镜像下发源码，换内核后自动重编
+    # 为什么必须：这些 .ko 的 vermagic 绑内核版本，飞牛 OTA 换内核后旧模块加载不了
+    #   → 网口退化 generic PHY、WiFi/BT 直接消失。设备上有 headers+gcc+make（实机确认），
+    #   源码 4.4 MB 可下发，所以能在板上重编。脚本只编译+安装，加载仍由 modules-load.d 决定，
+    #   任何失败只写日志不阻塞开机。
     REPO_ROOT="$(dirname "$(readlink -f "$0")")"
-    [[ -f "$REPO_ROOT/modules/ota/maxio-ensure.sh" ]] || fail "缺 modules/ota/maxio-ensure.sh"
-    [[ -f "$REPO_ROOT/modules/src/maxio.c" ]]         || fail "缺 modules/src/maxio.c（OTA 自愈要用它重编）"
-    install -D -m 0755 "$REPO_ROOT/modules/ota/maxio-ensure.sh" \
-        "$ROOT_MNT/usr/local/sbin/maxio-ensure.sh"
-    install -D -m 0644 "$REPO_ROOT/modules/ota/kickpi-k1-maxio-ensure.service" \
-        "$ROOT_MNT/etc/systemd/system/kickpi-k1-maxio-ensure.service"
-    install -D -m 0644 "$REPO_ROOT/modules/src/maxio.c" \
-        "$ROOT_MNT/usr/src/maxio-k1/maxio.c"
+    for f in modules/src/maxio.c modules/wifi-src.tar.gz \
+             modules/ota/modules-ensure.sh modules/ota/kickpi-k1-modules-ensure.service; do
+        [[ -f "$REPO_ROOT/$f" ]] || fail "OTA 自愈素材缺失: $f"
+    done
+    install -D -m 0644 "$REPO_ROOT/modules/src/maxio.c"         "$ROOT_MNT/usr/src/kickpi-k1-modules/maxio.c"
+    install -D -m 0644 "$REPO_ROOT/modules/wifi-src.tar.gz"     "$ROOT_MNT/usr/src/kickpi-k1-modules/wifi-src.tar.gz"
+    install -D -m 0644 "$REPO_ROOT/modules/wifi-src.tar.gz.ORIGIN" \
+        "$ROOT_MNT/usr/src/kickpi-k1-modules/wifi-src.tar.gz.ORIGIN"
+    install -D -m 0755 "$REPO_ROOT/modules/ota/modules-ensure.sh" \
+        "$ROOT_MNT/usr/local/sbin/kickpi-k1-modules-ensure.sh"
+    install -D -m 0644 "$REPO_ROOT/modules/ota/kickpi-k1-modules-ensure.service" \
+        "$ROOT_MNT/etc/systemd/system/kickpi-k1-modules-ensure.service"
     mkdir -p "$ROOT_MNT/etc/systemd/system/sysinit.target.wants"
-    ln -sf ../kickpi-k1-maxio-ensure.service \
-        "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-maxio-ensure.service"
-    echo "  ✓ OTA 自愈件已装：/usr/src/maxio-k1/maxio.c + /usr/local/sbin/maxio-ensure.sh + kickpi-k1-maxio-ensure.service"
+    ln -sf ../kickpi-k1-modules-ensure.service \
+        "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules-ensure.service"
+    echo "  ✓ OTA 自愈素材：maxio.c + wifi-src.tar.gz(2.2MB) + modules-ensure.sh + 单元（已 enable）"
 
     # 刷新模块依赖。旧条件 `[[ -x $ROOT_MNT/usr/bin/depmod ]]` 恒假 —— 基镜像里只有
     # /sbin/depmod → /bin/kmod，于是【depmod 从未运行】，modules.dep 不含 updates/kickpi-k1/*，
@@ -431,13 +435,15 @@ SOFTEOF
         grep -q "updates/kickpi-k1/maxio.ko" "$ROOT_MNT/usr/lib/modules/$KREL/modules.dep" \
             || fail "modules.dep 未含 updates/kickpi-k1/maxio.ko → modprobe/modules-load 全废"
         echo "  ✓ depmod -b 完成，modules.dep 已含 updates/kickpi-k1/maxio.ko"
-        for f in usr/src/maxio-k1/maxio.c usr/local/sbin/maxio-ensure.sh \
-                 etc/systemd/system/kickpi-k1-maxio-ensure.service; do
+        for f in usr/src/kickpi-k1-modules/maxio.c \
+                 usr/src/kickpi-k1-modules/wifi-src.tar.gz \
+                 usr/local/sbin/kickpi-k1-modules-ensure.sh \
+                 etc/systemd/system/kickpi-k1-modules-ensure.service; do
             [[ -f "$ROOT_MNT/$f" ]] || fail "OTA 自愈件缺失: $f"
         done
-        [[ -L "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-maxio-ensure.service" ]] \
+        [[ -L "$ROOT_MNT/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules-ensure.service" ]] \
             || fail "OTA 自愈单元未 enable（sysinit.target.wants 缺链接）"
-        echo "  ✓ OTA 自愈三件齐备且已 enable（换内核后开机自动重编 maxio.ko）"
+        echo "  ✓ OTA 自愈四件齐备且已 enable（换内核后自动重编 maxio + WiFi/BT 三件）"
     else
         fail "宿主缺少 depmod（kmod 包），无法刷新镜像 modules.dep"
     fi

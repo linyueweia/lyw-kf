@@ -1,0 +1,9 @@
+wifi-src.tar.gz 来源（不要手改，按下面重新生成）：
+  上游: https://github.com/retro98boy/seekwave-swt6621s  (clone --depth 1，2026-10-13 取)
+  补丁: patches/wifi-6.18-port.patch（本仓）
+  生成:
+    git clone --depth 1 https://github.com/retro98boy/seekwave-swt6621s /tmp/sw
+    ( cd /tmp/sw && git apply <本仓>/patches/wifi-6.18-port.patch )
+    tar czf modules/wifi-src.tar.gz --exclude=.git -C /tmp/sw .
+  内容: 45 个 .c / 4.4 MB 解包，2.2 MB 压缩；产出 swt6621s_wifi.ko / skw_sdio_lite.ko / skwbt.ko
+  实机验证(H88K, 6.18.18.c1145-trim, 原生 gcc): 编译 67s，三件 vermagic 全部匹配

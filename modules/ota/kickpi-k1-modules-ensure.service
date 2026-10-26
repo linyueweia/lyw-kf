@@ -1,0 +1,20 @@
+[Unit]
+Description=KICKPI K1: rebuild out-of-tree modules (maxio + SWT6621S) for the running kernel after OTA
+Documentation=file:/var/log/kickpi-k1-modules-ensure.log
+DefaultDependencies=no
+# 必须早于板级模块加载单元：maxio 要先于 stmmac/dwmac_rk 注册
+Before=kickpi-k1-modules.service systemd-modules-load.service network-pre.target
+After=local-fs.target
+# 只做"尽力而为"：失败也不能阻塞开机
+ConditionPathExists=/usr/src/kickpi-k1-modules
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/kickpi-k1-modules-ensure.sh
+# 脚本自身保证 exit 0；这里再兜一层，绝不让开机失败
+SuccessExitStatus=0 1 2
+TimeoutStartSec=600
+
+[Install]
+WantedBy=sysinit.target
