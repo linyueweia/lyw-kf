@@ -861,7 +861,7 @@
 	};
 
 	gpu@fde60000 {
-		compatible = "rockchip,rk3568-mali\0arm,mali-bifrost";
+		compatible = "arm,mali-bifrost";
 		phandle = <0xa6>;
 	
 		downdifferential = <0x0a>;
@@ -914,7 +914,7 @@
 		status = "okay";};
 
 	rga@fdeb0000 {
-		compatible = "rockchip,rga2\0rockchip,rk3568-rga\0rockchip,rk3288-rga";
+		compatible = "rockchip,rk3568-rga\0rockchip,rk3288-rga";
 		phandle = <0x102>;
 	
 		status = "okay";
@@ -1573,7 +1573,7 @@
 		reset-names = "core", "bus", "axi", "block", "timer";};
 
 	rng@fe388000 {
-		compatible = "rockchip,rk3568-rng";
+		compatible = "rockchip,cryptov2-rng\0rockchip,rk3568-rng";
 		reg = <0x00 0xfe388000 0x00 0x4000>;
 		clocks = <0x0f 0x70 0x0f 0x6f>;
 		clock-names = "core\0ahb";

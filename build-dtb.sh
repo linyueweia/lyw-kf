@@ -29,7 +29,9 @@ KERNEL_DIR="${KERNEL_DIR:-kernel}"
 DTS_SRC="${DTS_SRC:-dts/rk3568-kickpi-k1.dts}"
 DTS_NAME="rk3568-kickpi-k1.dts"
 OUT="${OUT:-dist/rk3568-kickpi-k1.dtb}"
-REF_CANDIDATES="rk3568-evb1-ddr4-v10.dtb rk3568-rock-3a.dtb rk3568-nanopi-r5s.dtb"  # 树自带 RK3568 参考板（取第一个存在的作 SoC 基线）
+# 参考板：不写死板名（踩过：evb1 在树里根本没有 → 门禁静默跳过）。
+# 直接从本轮 make dtbs 的产物里挑一个非本板的 rk3568-*.dtb 作 SoC 基线；
+# 一个都没有就硬失败 —— 不允许"没对照也算过"。
 
 [[ -f "$DTS_SRC" ]] || { echo "✗ 缺 $DTS_SRC"; exit 1; }
 command -v dtc >/dev/null || { echo "✗ 缺 dtc（apt install device-tree-compiler）"; exit 1; }
@@ -71,15 +73,14 @@ ls -la "$OUT"; sha256sum "$OUT"
 
 echo
 echo "==== 4) SoC 一致性门禁（对照树自带参考板）===="
-REF=""
-for c in $REF_CANDIDATES; do
-    if [[ -f "$DTS_DIR/$c" ]]; then REF="$DTS_DIR/$c"; break; fi
-done
+REF="$(ls "$DTS_DIR"/rk3568-*.dtb 2>/dev/null | grep -v "rk3568-kickpi-k1.dtb" | head -1 || true)"
 if [[ -z "$REF" ]]; then
-    echo "  ⚠ 树里没有可用的 RK3568 参考板（试过: $REF_CANDIDATES），跳过对照"
-else
-    python3 tools/dtb-soc-consistency.py "$OUT" "$REF" || exit 1
+    echo "  ✗ 树里没有编出任何可用的 RK3568 参考板 —— 无法做 SoC 对照，拒绝放行"
+    echo "    （本轮 dtbs 产物里 rk3568-*.dtb 数量: $(ls "$DTS_DIR"/rk3568-*.dtb 2>/dev/null | wc -l)）"
+    exit 1
 fi
+echo "  参考板: $(basename "$REF")"
+python3 tools/dtb-soc-consistency.py "$OUT" "$REF" || exit 1
 
 echo
 echo "==== 5) 本板节点自检 ===="
