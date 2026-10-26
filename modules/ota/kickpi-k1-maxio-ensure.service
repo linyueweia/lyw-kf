@@ -1,0 +1,20 @@
+[Unit]
+Description=KICKPI K1: ensure Maxio MAE0621A PHY module exists for the running kernel (OTA self-heal)
+Documentation=file:/var/log/maxio-ensure.log
+DefaultDependencies=no
+# 必须早于 board 模块加载单元：maxio 要先于 stmmac/dwmac_rk 注册
+Before=kickpi-k1-modules.service systemd-modules-load.service network-pre.target
+After=local-fs.target
+# 只是"尽力而为"：失败也不能阻塞开机
+ConditionPathExists=/usr/src/maxio-k1/maxio.c
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/maxio-ensure.sh
+# 自愈脚本自身已保证不会非零退出；这里再加一层，绝不让开机失败
+SuccessExitStatus=0 1 2
+TimeoutStartSec=300
+
+[Install]
+WantedBy=sysinit.target
