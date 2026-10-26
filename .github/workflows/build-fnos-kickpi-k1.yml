@@ -201,7 +201,7 @@ jobs:
           fi
           sudo -E BASE=base/fnnas-base.img \
           DTB=dist/rk3568-kickpi-k1.dtb \
-          UBOOT=uboot/k1-first32m.bin \
+          UBOOT=uboot/fnos-rk3568-first32m.bin \
                   MODULES_DIR="$MODDIR" \
                   BUILD_NUM="${{ github.run_number }}" \
                   OUT_DIR=out \
@@ -220,7 +220,7 @@ jobs:
             # （旧值 1 且 verify 脚本从不读 EXPECT_MODULES → 构建静默降级也全绿，取证 A3）
             EXP=4
           fi
-          sudo -E EXPECT_MODULES="$EXP" UBOOT=uboot/k1-first32m.bin bash verify-fnos-bootchain.sh "$IMG"
+          sudo -E EXPECT_MODULES="$EXP" UBOOT=uboot/fnos-rk3568-first32m.bin bash verify-fnos-bootchain.sh "$IMG"
 
       - name: Show outputs
         run: |

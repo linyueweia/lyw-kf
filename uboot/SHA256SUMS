@@ -1,4 +1,1 @@
-b6c138e16ce6de558882268baaee15bcb2f503f2a2b98894d4415ccc64b450c6  k1-first32m.bin
-77aed16b50fb6d82c1f635019234ae499c718c28e8047b0378df0736dd83da14  k1-first32m.bin[17408:]（注入载荷区）
-来源: fnnas-base-images v1.0.0 基镜像前32MiB（= K1 板上同款, ddr-v1.23-03ea844c5d, 与 eMMC 原厂同哈希）
-注入规则: 只写 [17408, 32MiB)，镜像自身 GPT 前17408字节保留
+b6c138e16ce6de558882268baaee15bcb2f503f2a2b98894d4415ccc64b450c6  fnos-rk3568-first32m.bin
