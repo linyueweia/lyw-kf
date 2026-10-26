@@ -101,8 +101,9 @@ if [[ -n "${UBOOT:-}" ]]; then
 import sys, hashlib, struct
 img, ub = sys.argv[1], sys.argv[2]
 d0 = open(img, 'rb').read(32*1024*1024)
-if sum(1 for b in d0 if b) > 0:
-    print("  （基镜像前导区非零 —— 保留原样，不注入）")
+# 只看载荷区 [17408:]：GPT（前17408字节）本来就非零，整段判零会永远误判不注入
+if sum(1 for b in d0[17408:] if b) > 0:
+    print("  （载荷区非零 —— 基镜像自带 U-Boot，保留原样不注入）")
     sys.exit(0)
 u = open(ub, 'rb').read()
 with open(img, 'r+b') as f:

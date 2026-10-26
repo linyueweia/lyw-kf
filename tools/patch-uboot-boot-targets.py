@@ -46,11 +46,19 @@ OVERLAP = 256
 assert len(OLD) == len(NEW) == 36, "新旧串必须等长"
 
 
-def scan(fh, needle: bytes):
-    """分块扫描，返回所有命中偏移。fh 需支持 seek/read，要能被重复调用。"""
+UBOOT_ZONE = 32 * 1024 * 1024  # 只认前 32MiB 的 U-Boot 区
+
+
+def scan(fh, needle: bytes, end: int = UBOOT_ZONE):
+    """分块扫描 U-Boot 区 [0, end)，返回所有命中偏移。
+
+    只扫前 32MiU：v1.1.0 起基镜像删过 boot 分区的 u-boot-rockchip-spi.bin，
+    unlink 后字节仍留在盘上（实测 0x4cecd45 命中旧串），全盘扫会把残留
+    当成第二处命中、触发"恰好 1 处"断言误炸。
+    """
     hits = []
     fh.seek(0, os.SEEK_END)
-    total = fh.tell()
+    total = min(fh.tell(), end)
     pos = 0
     tail = b""
     while pos < total:
