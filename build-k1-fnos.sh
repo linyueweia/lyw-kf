@@ -841,8 +841,13 @@ grep -q 'part uuid' "$BOOT_MNT/boot.cmd" 2>/dev/null \
 [[ -f "$BOOT_MNT/boot.scr" ]] || fail "缺 boot.scr（官方引导链断了）"
 grep -q "fdtfile=rockchip/$DTB_NAME" "$BOOT_MNT/fnEnv.txt" \
     && echo "  ✓ fnEnv fdtfile 正确" || fail "fnEnv 校验失败"
-grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt" \
-    && echo "  ✓ fnEnv extraargs 含日志级别" || fail "fnEnv extraargs 缺 loglevel"
+# 2026-10-27 翻案：产品口径**不得**带 loglevel / ignore_loglevel
+# （它会把 boot.scr 拼出的 loglevel=${verbosity} 顶掉 → 开机全程刷屏、压吞吐）
+if grep -q '^extraargs=' "$BOOT_MNT/fnEnv.txt" && ! grep -q 'loglevel' "$BOOT_MNT/fnEnv.txt"; then
+    echo "  ✓ fnEnv extraargs 无调试参数（产品口径）"
+else
+    fail "fnEnv extraargs 仍含 loglevel/ignore_loglevel 调试参数：$(grep '^extraargs=' "$BOOT_MNT/fnEnv.txt")"
+fi
 # 不能留 extlinux.conf 抢引导（它会把 root= 钉在构建期 PARTUUID 上）
 [[ ! -f "$BOOT_MNT/extlinux/extlinux.conf" ]] \
     || fail "仍存在 extlinux/extlinux.conf：u-boot 会优先走它，绕开官方 boot.scr 的现场取 UUID"

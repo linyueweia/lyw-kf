@@ -113,19 +113,22 @@ say "5) CMA 对齐官方口径（cma=256M）"
 #   形态；本仓按 256M 交付，并把"相册 AI 重负载可能挂死"写进 README / OTA 验收单作为已知限制。
 if [ -f /boot/fnEnv.txt ]; then
 	if grep -q '^extraargs=.*cma=' /boot/fnEnv.txt; then
-		if grep -q '^extraargs=.*cma=256M' /boot/fnEnv.txt; then
-			ok "fnEnv.txt 已是官方口径 cma=256M"
+		# 2026-10-27 改判：产品口径是**精确**的 extraargs=cma=256M。
+		# 历史上这里只判 cma=256M 就 ok，于是 "cma=256M loglevel=7 ignore_loglevel" 被当成合格，
+		# 那串会把 boot.scr 的 loglevel=${verbosity} 顶掉 → 开机全程刷屏 + 压吞吐。
+		if grep -qx 'extraargs=cma=256M' /boot/fnEnv.txt; then
+			ok "fnEnv.txt 已是官方口径 extraargs=cma=256M（无调试参数）"
 		else
-			sed -i 's/\(extraargs=.*\)cma=[0-9]*[MG]/\1cma=256M/' /boot/fnEnv.txt
-			ok "fnEnv.txt: cma 归一为官方口径 256M（重启后生效）"
+			sed -i 's|^extraargs=.*|extraargs=cma=256M|' /boot/fnEnv.txt
+			ok "fnEnv.txt: extraargs 归一为 official 'cma=256M'（已剥掉 loglevel/ignore_loglevel，重启后生效）"
 		fi
 	else
 		# 新增 extraargs：临时文件建在 /boot（同文件系统、名字唯一）。
 		# 不用固定 /tmp/_fnenv.keep —— CI run#69 就是死在共享 /tmp 上同名文件的 Permission denied。
 		FNE="$(mktemp /boot/.fnenv.XXXXXX 2>/dev/null || mktemp)"
-		{ cat /boot/fnEnv.txt; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$FNE" \
+		{ cat /boot/fnEnv.txt; echo "extraargs=cma=256M"; } > "$FNE" \
 			&& cat "$FNE" > /boot/fnEnv.txt && rm -f "$FNE"
-		ok "fnEnv.txt 新增 extraargs=cma=256M loglevel=7 ignore_loglevel（重启后生效）"
+		ok "fnEnv.txt 新增 extraargs=cma=256M（重启后生效）"
 	fi
 else
 	bad "/boot/fnEnv.txt 不存在（本脚本只针对 fnOS）"
