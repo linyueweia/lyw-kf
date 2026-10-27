@@ -127,10 +127,10 @@ TF 卡系统功能全部正常，点飞牛「在线更新」之后，双千兆�
 
 | 文件 | 作用 |
 |------|------|
-| `assets/kickpi-k1-build-modules.sh` | 对**指定内核**本机重编 4 个模块，装进 `/usr/lib/modules/<该内核>/updates/kickpi-k1/`；幂等（已有可用 .ko 就跳过）、vermagic 不符不安装、失败不破坏既有 .ko、全程记 `/var/log/kickpi-k1-modules.log` |
+| `assets/kickpi-k1-build-modules.sh` | 对**指定内核**本机重编 4 个模块，装进 `/usr/lib/modules/<该内核>/updates/kickpi-k1/`；幂等（已有可用 .ko 就跳过）、vermagic 不符不安装、失败不破坏既有 .ko、全程记 `/var/log/kickpi-k1-modules.log`。**注意：2026-10-27 整理后本脚本已删除，编译逻辑并入 `modules/ota/modules-ensure.sh`（可传内核 release），本条只作历史记录** |
 | `assets/zz-kickpi-k1-modules` → `/etc/kernel/postinst.d/` | 每装一个新内核自动触发上面对该内核的构建；头文件没到位就写 `/var/lib/kickpi-k1/needs-build-<rel>` 标记，开机补编 |
 | `assets/kickpi-k1-load-modules` + `kickpi-k1-modules.service` | 加载与自检一律按 `uname -r` 定位，不再写死 release |
-| `build-k1-fnos.sh` 注入 | 把源码放进 `/usr/src/kickpi-k1/`（`maxio.c` + 已打 `patches/wifi-6.18-port.patch` 的 SWT6621S 树） |
+| `build-k1-fnos.sh` 注入 | 把源码放进 `/usr/src/kickpi-k1-modules/`（`maxio.c` + `wifi-src.tar.gz`，即已打 `patches/wifi-6.18-port.patch` 的 SWT6621S 树；2026-10-27 起唯一目录） |
 
 **可行性前提（实测确认）**：基镜像自带 `build-essential 12.9 / gcc-12 / make`，
 且每个 `linux-image-*` 都配套装了 `linux-headers-<同版本>`（c951、c1145 两套 headers 都在系统里）。
@@ -188,7 +188,7 @@ grep -E "maxio|kickpi" /var/log/kickpi-k1-modules.log
 随内核一起更新；我们这次自编 SWT6621S 在新内核上编译失败，但**不影响任何功能**
 （官方那份已在，`lsmod` 里 `swt6621s_wifi`/`skwbt` 正常加载）。
 
-**据此改进 `assets/kickpi-k1-build-modules.sh`（本次提交）**：
+**据此改进 `assets/kickpi-k1-build-modules.sh`（本次提交；该脚本 2026-10-27 已并入 `modules/ota/modules-ensure.sh`，下文为历史记录）**：
 1. 先探测官方 seekwave，有就跳过自编（不再在新内核上做无谓且易失败的编译）；
 2. 编译失败时抽取真正的 `error:` 行（此前只看到 make 的 `Error 1` 收尾，真错误被 warning 淹没）；
 3. 结果断言改为「**maxio 必须就位**」（网口硬依赖），WiFi 只要官方/自编有其一即可；
@@ -522,22 +522,26 @@ ethtool --show-eee end0 end1   # 期望：EEE status: disabled
    `/usr/trim` 全家无一引用它，逐二进制 strings 取证）。
 
 **定案修复（两层）**：
-1. `fnEnv.txt` 的 `extraargs`：`cma=256M` → **`cma=1G`**（本仓 build-k1-fnos.sh 的
-   生成模板、K1_EXTRAARGS、extlinux 静态回退、在线修复件四处同步改）。
-   4GB 内存下 CMA 空闲时可被普通 movable 页借用，不浪费；1G 对 339MB 请求留足余量。
+1. `fnEnv.txt` 的 `extraargs`：**与官方 R5S 对齐 = `cma=256M`**（2026-10-27 用户定案）。
+   本仓 build-k1-fnos.sh 的模板 / `K1_EXTRAARGS` / extlinux 静态回退 / 在线修复件四处同口径，
+   构建期+镜像门禁都硬断言 `cma=256M` 并反向拒绝 1G/2G。
+   ⚠ 历史弯路（2026-10-15 曾把本板放大到 `cma=1G` 并实机验证 `CmaTotal=1048576 kB`）：
+   放大只是**绕开**相册 AI 的 339MB 连续申请，不是官方形态；按用户口径已回退到 256M，
+   相册 AI 重负载在 256M 下仍会失败 —— 这是官方同口径的已知限制（见 README「已知限制」）。
 2. 装 Debian 标准 `watchdog` 包挂 `/dev/watchdog0`（Synopsys DesignWare，
    44s 超时、无 magic close）并 `systemctl enable watchdog.service` ——
    极端情况下内核再挂死，44 秒内硬件硬复位自愈，不再人工断电。
    （watchdog.service 的 WantedBy 是 graphical.target，本机开机链未必经过它；
    实测 `systemctl enable` 生成的 wants 链即足够，勿再加 drop-in。）
 
-**实机验证（2026-10-15，eMMC fnOS）**：重启后 `/proc/cmdline` 含 `cma=1G`、
+**实机验证（2026-10-15，eMMC fnOS，当时口径 cma=1G）**：`/proc/cmdline` 含 `cma=1G`、
 `CmaTotal: 1048576 kB`；watchdog.service 开机自动 active（journal: "Started
 watchdog.service" + "hardware watchdog identity: Synopsys DesignWare Watchdog"）。
 
 **复检判据**：
 ```bash
-grep -o 'cma=[0-9]*[MG]' /proc/cmdline   # 期望：cma=1G
+grep -o 'cma=[0-9]*[MG]' /proc/cmdline   # 期望：cma=256M（官方 R5S 口径）
+grep CmaTotal /proc/meminfo               # 期望：262144 kB
 systemctl is-active watchdog.service      # 期望：active
 wdctl | head -6                           # 期望：Device /dev/watchdog0, Timeleft 在走
 ```

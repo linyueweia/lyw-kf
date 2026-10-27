@@ -5,7 +5,7 @@
 #   skw_sdio_lite.ko / swt6621s_wifi.ko / skwbt.ko —— SWT6621S WiFi/BT
 #
 # 关键点（都是实测踩出来的）：
-#   1) 内核版本必须与镜像一致（基镜像为 6.18.18.c951-trim），从
+#   1) 内核版本必须与镜像一致（当前基镜像 v1.1.0 = 6.18.18.c1145-trim），从
 #      /usr/lib/modules/<rel> 与 /usr/src/linux-headers-<rel> 自动探测，不写死。
 #   2) 头文件包可能缺 .config —— 用 include/config/auto.conf 补出。
 #   3) 头文件包里的主机工具（fixdep/modpost）可能是别的主机/glibc 的，跑不了 —— 重编。

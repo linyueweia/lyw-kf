@@ -1,16 +1,16 @@
 # maxio.ko 构建配方（已在实机验证通过）
 
-目标内核：**fnOS 基镜像内核 `6.18.18.c951-trim`**（release 必须从基镜像 rootfs 的
-`/usr/lib/modules/<release>` 或 BOOT 分区 `config-<release>` 取，不是社区包名）
-产物：maxio.ko，vermagic 必须包含 `6.18.18.c951-trim`
+目标内核：**fnOS 基镜像内核**（release 必须从基镜像 rootfs 的 `/usr/lib/modules/<release>`
+或 BOOT 分区 `config-<release>` 取，不是社区包名；当前基镜像 v1.1.0 = `6.18.18.c1145-trim`）
+产物：maxio.ko，vermagic 必须包含该 release（逐字一致）
 
 > ⚠ 别用社区包 `header-rockchip-6.18.18-trim`：它编出的 vermagic 是
-> `6.18.18-trim SMP preempt mod_unload aarch64`，与基镜像 release 差一个 `.c951` 后缀，
+> `6.18.18-trim SMP preempt mod_unload aarch64`，与基镜像 release 差 `.cNNN` 后缀，
 > 装机 `insmod/modprobe` 会直接被 vermagic 比对拒掉（本仓库早期提交的预编 .ko 正是这个
 > 命运，已移除）。`build-modules.sh` 会从基镜像里解 header 现编并逐个校验。
 
 ## 依赖
-- 首选：**基镜像自带 header** `/usr/src/linux-headers-6.18.18.c951-trim`
+- 首选：**基镜像自带 header** `/usr/src/linux-headers-<release>`
   （由 `build-modules.sh` 自动解出并修好 .config / 主机工具 / autoconf.h）
 - 备选：ophub/fnnas release kernel_fnnas -> 6.18.18-rockchip.tar.gz 的
   `header-rockchip-6.18.18-trim.tar.gz` —— 只能当**源码来源**，release 对不上，产物不可装机

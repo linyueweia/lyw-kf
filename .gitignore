@@ -1,6 +1,10 @@
 base/
 out/
+built-modules/
+kernel/
+td/
 *.img
 *.img.xz
+*.ko
 __pycache__/
 *.pyc

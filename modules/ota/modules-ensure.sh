@@ -22,7 +22,9 @@
 #   · 任何失败只写日志，绝不阻塞开机（网络/WiFi 降级，系统照常起来）。
 set -u
 
-KVER="$(uname -r)"
+# 可选 $1 = 目标内核 release（postinst 钩子装新内核时传进来；缺省＝当前运行内核）。
+# 注意：postinst 触发时 uname -r 还是【旧内核】，所以必须支持显式传入，不能只靠 uname。
+KVER="${1:-$(uname -r)}"
 SRC="/usr/src/kickpi-k1-modules"
 HDR="/lib/modules/${KVER}/build"
 DST="/usr/lib/modules/${KVER}/updates/kickpi-k1"

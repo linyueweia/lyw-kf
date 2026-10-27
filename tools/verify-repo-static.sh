@@ -69,6 +69,18 @@ if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
     fi
 fi
 
+# 媒体簇对标官方 R5S（2026-10-27 用户口径：与官方 R5S 方案对齐，逐节点、逐属性）
+if [[ -f dist/rk3568-kickpi-k1.dtb && -f dist/rk3568-nanopi-r5s-official.dtb ]]; then
+    if python3 tools/r5s-media-parity.py dist/rk3568-kickpi-k1.dtb \
+            dist/rk3568-nanopi-r5s-official.dtb >/tmp/_rs_parity.log 2>&1; then
+        echo "  ✓ 媒体簇与官方 R5S 逐节点一致（例外已登记 dts/r5s-media-allowlist.txt）"
+    else
+        echo "  ✗ 媒体簇与官方 R5S 不一致"; sed 's/^/     /' /tmp/_rs_parity.log | tail -24; FAIL=1
+    fi
+else
+    echo "  ✗ 缺 dist/rk3568-nanopi-r5s-official.dtb（官方 R5S 参照件，媒体簇对标的前提）"; FAIL=1
+fi
+
 # dist DTB 必须由 dts/ 源现编得出（防改了源忘了重编 DTB）
 if [[ -f dts/rk3568-kickpi-k1.dts && -f dist/rk3568-kickpi-k1.dtb ]]; then
     T="$(mktemp -d)"
@@ -85,14 +97,43 @@ if [[ -f dts/rk3568-kickpi-k1.dts && -f dist/rk3568-kickpi-k1.dtb ]]; then
     rm -rf "$T"
 fi
 
-# 预编 .ko 的 vermagic 必须与装配用的内核一致（否则本地 MODULES_DIR=modules 用法必然被硬闸 fail）
+# 预编 .ko 的 vermagic 必须是【官方基镜像内核】形态（6.18.x.cNNN-trim）。
+# 旧写法写死 c951-trim —— 基镜像已升到 v1.1.0（c1145-trim），那种断言会在换成对版本后误杀。
 if [[ -f modules/maxio.ko ]]; then
-    vm="$(strings modules/maxio.ko | grep -oE 'vermagic=[^\"]*' | head -1)"
-    case "$vm" in
-        *"c951-trim"*) echo "  ✓ modules/maxio.ko vermagic 与基镜像一致 ($vm)";;
-        *) echo "  ✗ modules/maxio.ko vermagic 过期: $vm"; echo "     → 删除它或用 build-modules.sh 按基镜像 header 重编"; FAIL=1;;
-    esac
+    vm="$(strings modules/maxio.ko | grep -oE 'vermagic=[^"]*' | head -1)"
+    if [[ "$vm" =~ 6\.18\.[0-9]+\.c[0-9]+-trim ]]; then
+        echo "  ✓ modules/maxio.ko vermagic 是官方基镜像口径 ($vm)"
+    else
+        echo "  ✗ modules/maxio.ko vermagic 不是官方基镜像口径: $vm"
+        echo "     → 删掉它：.ko 一律由 build-modules.sh 按基镜像 header 现编"
+        FAIL=1
+    fi
 fi
+
+# 已废弃件不得回归（2026-10-27 仓库整理：自愈逻辑只留一套）
+# 注意：只判【真正的调用/安装行】，注释里提到旧文件名不算（历史说明要保留）。
+for f in assets/kickpi-k1-build-modules.sh modules/wifi-src.tar.gz.ORIGIN; do
+    [[ -e "$f" ]] && { echo "  ✗ 已废弃件回归: $f（编译逻辑只用 modules/ota/modules-ensure.sh）"; FAIL=1; }
+done
+for f in build-k1-fnos.sh modules/ota/modules-ensure.sh assets/zz-kickpi-k1-modules; do
+    if awk '/kickpi-k1-build-modules/ && $0 !~ /^[[:space:]]*#/ {found=1} END{exit !found}' "$f" 2>/dev/null; then
+        echo "  ✗ $f 里仍在调用已废弃的 kickpi-k1-build-modules.sh"; FAIL=1
+    fi
+done
+# 构建期不得依赖外网 clone（整理后源码随仓库 wifi-src.tar.gz 下发，离线可复现）
+if awk '/git clone/ && $0 !~ /^[[:space:]]*#/ {found=1} END{exit !found}' build-k1-fnos.sh 2>/dev/null; then
+    echo "  ✗ build-k1-fnos.sh 里有构建期 git clone（离线不可复现，源码应来自仓库）"; FAIL=1
+fi
+[[ $FAIL -eq 0 ]] && echo "  ✓ 无废弃件/无构建期联网依赖"
+
+# 文档与脚本一致性：README/文档里写的 ./xxx.sh 必须存在且带可执行位
+# （本机是 Windows 提交的仓库，曾把 build-*.sh 提交成 100644 → 照文档 ./build-dtb.sh 必 Permission denied）
+while IFS= read -r s; do
+    [[ -f "$s" ]] || { echo "  ✗ 文档引用了不存在的脚本: $s"; FAIL=1; continue; }
+    [[ -x "$s" ]] || { echo "  ✗ $s 缺可执行位（文档写 ./$s 会 Permission denied）"; FAIL=1; }
+done < <(grep -rhoE '\./[A-Za-z0-9_./-]+\.sh' README.md PORTING.md TROUBLESHOOTING.md docs/ 2>/dev/null \
+         | sed 's#^\./##' | sort -u)
+[[ $FAIL -eq 0 ]] && echo "  ✓ 文档引用的脚本都存在且可执行"
 
 echo "------------------------------------------------"
 [[ $FAIL -eq 0 ]] && echo "REPO STATIC GATE: ALL PASS" || echo "REPO STATIC GATE: FAIL"

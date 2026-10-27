@@ -17,9 +17,10 @@
 #        本板风扇由内核 gpio-fan 管，本仓决策 = mask（同上 (3) 段）。
 #     4) webdav.service 每次启动告警 "marked executable" → chmod 644。
 #     5) 每次启动还报 networking.service（ifupdown 残留）→ 本仓决策 = mask。
-#     6) 相册 AI 整机挂死（2026-10-14 两次实机取证）—— rknpu 要 173/339MB 连续 DMA，
-#        而 fnEnv.txt 的 cma=256M < 339MB 请求 → 必失败 → 闭源驱动挂住内核，只能断电。
-#        → fnEnv.txt extraargs cma=256M → 1G（重启生效）。
+#     6) 相册 AI 在 256M CMA 下会挂死（2026-10-14 两次实机取证）—— rknpu 要 173/339MB 连续 DMA，
+#        而官方口径 fnEnv.txt 的 cma=256M < 339MB 请求 → 必失败 → 闭源驱动挂住内核，只能断电。
+#        2026-10-27 定案：**CMA 与官方 R5S 对齐 = 256M**（官方 DTB 无 reserved 区，cmdline 唯一决定），
+#        本脚本只把被放大过的值【归一回 256M】，不再放大；相册 AI 重负载列为已知限制。
 #     7) 硬件看门狗无人管（官方零管理：/usr/trim 全家无一引用 /dev/watchdog）
 #        → 装 Debian 标准 watchdog 包挂 /dev/watchdog0（Synopsys DW，44s 超时无 magic close），
 #          内核再挂死时 44s 内硬复位自愈，不再依赖人工断电。
@@ -101,23 +102,27 @@ else
 	echo "  (跳过：卡不在位 / 已挂载 / 不是 K1 卡（LABEL≠armbi_boot）)"
 fi
 
-# ── 5) NPU CMA 扩容：fnEnv.txt extraargs cma=256M → 1G ────────────────────
-say "5) NPU CMA 扩容（相册 AI 整机挂死根因：rknpu 请求 173/339MB > cma=256M 总量）"
-# 病理（2026-10-14 两次实机取证，kern.log 现场）：
-#   trim.img2vec → drm_ioctl → rknpu_gem_object_create → dma_direct_alloc 一次要
-#   181448704 或 355860480 字节连续 DMA；CMA 池总量 256M < 339M 请求 → 必失败（-16）；
-#   闭源 rknpu 0.9.8 失败路径把内核挂死（日志戛然而止、无 panic 输出），只能断电。
-#   修法：CMA 1G（4GB 内存下空闲时可被普通 movable 页借用，不浪费）。
+# ── 5) CMA 对齐官方口径：fnEnv.txt extraargs cma=256M（不放大、不回退）────────
+say "5) CMA 对齐官方口径（cma=256M）"
+# 口径（2026-10-27 定案，用户明确）：官方 R5S 的 fnEnv.txt 就是 extraargs=cma=256M，
+#   官方 DTB 里也没有 reserved-memory CMA 区 —— cmdline 的 cma= 是唯一决定因素。
+#   本仓与官方逐字对齐，256M 是交付值。
+# 保留的历史取证（勿重犯，也勿再"顺手放大"）：2026-10-15 本板曾放到 1G，起因是相册 AI
+#   （trim.img2vec → rknpu_gem_object_create）一次要 173MB/339MB 连续 DMA，256M 池必失败
+#   （-16），闭源 rknpu 0.9.8 的失败路径会把内核挂死。放宽 CMA 只是绕开该路径，不是官方
+#   形态；本仓按 256M 交付，并把"相册 AI 重负载可能挂死"写进 README / OTA 验收单作为已知限制。
 if [ -f /boot/fnEnv.txt ]; then
-	if grep -q '^extraargs=.*cma=256M' /boot/fnEnv.txt; then
-		sed -i 's/\(extraargs=.*\)cma=256M/\1cma=1G/' /boot/fnEnv.txt
-		ok "fnEnv.txt: cma=256M → cma=1G（重启后生效）"
-	elif grep -q '^extraargs=.*cma=' /boot/fnEnv.txt; then
-		ok "fnEnv.txt 已含非 256M 的 cma 值，不动：$(grep '^extraargs=' /boot/fnEnv.txt)"
+	if grep -q '^extraargs=.*cma=' /boot/fnEnv.txt; then
+		if grep -q '^extraargs=.*cma=256M' /boot/fnEnv.txt; then
+			ok "fnEnv.txt 已是官方口径 cma=256M"
+		else
+			sed -i 's/\(extraargs=.*\)cma=[0-9]*[MG]/\1cma=256M/' /boot/fnEnv.txt
+			ok "fnEnv.txt: cma 归一为官方口径 256M（重启后生效）"
+		fi
 	else
 		grep -v '^extraargs=' /boot/fnEnv.txt > /tmp/_fnenv.keep
-		{ cat /tmp/_fnenv.keep; echo "extraargs=cma=1G loglevel=7 ignore_loglevel"; } > /boot/fnEnv.txt
-		ok "fnEnv.txt 新增 extraargs=cma=1G loglevel=7 ignore_loglevel（重启后生效）"
+		{ cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > /boot/fnEnv.txt
+		ok "fnEnv.txt 新增 extraargs=cma=256M loglevel=7 ignore_loglevel（重启后生效）"
 	fi
 else
 	bad "/boot/fnEnv.txt 不存在（本脚本只针对 fnOS）"

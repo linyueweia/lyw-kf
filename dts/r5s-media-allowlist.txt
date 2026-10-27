@@ -1,0 +1,35 @@
+# 媒体簇对标例外清单（tools/r5s-media-parity.py 读取）
+#
+# 判据：K1 与官方 R5S 同为 RK3568，媒体簇必须与官方件 dist/rk3568-nanopi-r5s-official.dtb
+#       （飞牛官方 R5S 固件内那份，sha256 95d4f336ce4d5268bf1f950a51d10ad8d3b13fd75eb9f8a079d90dc9671f8ed7）
+#       逐节点一致。下列差异是【本板有实机证据的故意保留】，新增前必须补齐同样的证据。
+#
+# 格式：<missing|extra|diff|missing-prop|extra-prop> <节点路径或节点名> [属性名]
+#
+# ── 1. 不新增 vdpu@fdea0400（官方有，本板故意没有）──────────────────────────
+# 官方 R5S 同时挂着两代解码节点：video-codec@fdea0400(rockchip,rk3568-vpu) 与
+# vdpu@fdea0400(rockchip,vpu-decoder-v2)，两者寄存器区间重叠（0xfdea0400 落在
+# 0xfdea0000+0x800 内）。本板目前只挂 legacy 那份，且 2026-10-19 实机已验收
+# 「ffmpeg -c:v hevc_rkmpp 解码 + hevc→h264 转码 EXIT=0、resetting 风暴 0」。
+# 新增第二份会让同一硬件被两个 mpp 客户端争用 —— 正是 10-19 转码死机那一类风险，
+# 必须先上机验证（判据：/sys/kernel/debug/mpp_service 只有一个 vdpu 实例、
+# rkvdec 中断正常增长、无 mpp_task_timeout）再解除本条。
+missing vdpu@fdea0400
+
+# ── 2. NPU 的 iommu@fde4b000 保持 disabled（官方是 okay）────────────────────
+# 本板 NPU 域握手失败有实测证据：pm_domain 等不到 npu 域 ACK（failed to get ack on
+# domain 'npu'）→ iommu probe 被挡 → rknpu iommu_group_get() 返回 NULL → -EINVAL，
+# NPU 完全不可用。本板走驱动自带的 non-iommu 逃生门（iommu disabled + interrupt-names
+# = "npu_irq"），2026-10-15 实机验收通过（img2vec_medium.rk3568.rknn OK，npu 中断
+# 0→25）。打开 iommu 需先解决本板电源域握手，属内核问题，不是 DT 能对齐的。
+diff /iommu@fde4b000 status
+
+# ── 3. GPU OPP 表多两个分档变体（官方表没有）────────────────────────────────
+# 本板 dump 自带的 opp-j-600000000 / opp-m-800000000 是同一 SoC 的速度分档变体，
+# 每条都带 opp-supported-hw，未命中的档位内核会自行过滤，不影响选频；删除会让
+# 低档位芯片失去对应电压点，故保留。
+extra opp-table-1/opp-j-600000000
+extra opp-table-1/opp-m-800000000
+# NPU OPP 表同理（本板 dump 自带的分档变体）
+extra npu-opp-table/opp-j-600000000
+extra npu-opp-table/opp-m-900000000

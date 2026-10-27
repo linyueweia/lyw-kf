@@ -7,8 +7,9 @@ on:
   push:
     paths:
       - 'dts/**'
+      - 'dist/**'
       - 'build-dtb.sh'
-      - 'tools/dtb-soc-consistency.py'
+      - 'tools/**'
       - '.github/workflows/build-dtb.yml'
 
 permissions:
@@ -32,6 +33,14 @@ jobs:
           bash build-dtb.sh
           ls -la dist/
           sha256sum dist/*.dtb
+
+      - name: Media gates (官方 R5S 对标 + 媒体层防回归)
+        run: |
+          set -e
+          chmod +x tools/r5s-media-parity.py tools/verify-k1-media-dts.sh tools/verify-k1-net-dts.sh
+          python3 tools/r5s-media-parity.py dist/rk3568-kickpi-k1.dtb dist/rk3568-nanopi-r5s-official.dtb
+          bash tools/verify-k1-media-dts.sh dist/rk3568-kickpi-k1.dtb
+          bash tools/verify-k1-net-dts.sh dist/rk3568-kickpi-k1.dtb
 
       - name: Upload DTB
         uses: actions/upload-artifact@v4

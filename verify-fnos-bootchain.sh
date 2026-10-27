@@ -147,6 +147,41 @@ fi
 grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/fnEnv.txt" 2>/dev/null && ok "fnEnv 指向本板 DTB" \
     || { grep -q 'rk3568-kickpi-k1.dtb' "$MNT_B/extlinux/extlinux.conf" 2>/dev/null && ok "extlinux 指向本板 DTB" || bad "引导配置未指向本板 DTB"; }
 
+# CMA 硬判据：与官方 R5S 对齐 = 256M（2026-10-27 用户定案；官方 fnEnv 就是 256M，
+# 官方 DTB 无 reserved CMA 区 → cmdline 的 cma= 是唯一决定因素）
+if [[ -f "$MNT_B/fnEnv.txt" ]]; then
+    if grep -q '^extraargs=.*cma=256M' "$MNT_B/fnEnv.txt"; then
+        ok "fnEnv extraargs cma=256M（与官方 R5S 对齐）"
+    else
+        bad "fnEnv extraargs 缺 cma=256M（官方口径）：$(grep '^extraargs=' "$MNT_B/fnEnv.txt" | head -1)"
+    fi
+    if ( set +o pipefail; grep -qE '^extraargs=.*cma=(1G|2G|512M|1024M)' "$MNT_B/fnEnv.txt" ); then
+        bad "CMA 被放大到非官方值（历史 1G 回退）"
+    else
+        ok "CMA 未被放大（无 1G/2G）"
+    fi
+fi
+
+# kernelfile 必须指向真实内核 —— "刷进去必黑"事故类（xck-nas 2026-10-27 实证）
+if [[ -f "$MNT_B/fnEnv.txt" ]]; then
+    KFN="$(grep -m1 '^kernelfile=' "$MNT_B/fnEnv.txt" | cut -d= -f2- | sed 's#^/##')"
+    if [[ -n "$KFN" && -e "$MNT_B/$KFN" ]]; then
+        KFREAL="$(readlink -f "$MNT_B/$KFN")"
+        KFS="$(stat -c%s "$KFREAL")"
+        [[ "$KFS" -gt 5242880 ]] && ok "kernelfile=$KFN 就位（$KFS 字节）" \
+            || bad "kernelfile=$KFN 只有 $KFS 字节（<5MB → 截断或不是内核）"
+        KFMAGIC="$( set +o pipefail; dd if="$KFREAL" bs=1 skip=56 count=4 status=none 2>/dev/null )"
+        KFGZIP="$( set +o pipefail; dd if="$KFREAL" bs=1 count=2 status=none 2>/dev/null | od -An -tx1 | tr -d ' \n' )"
+        if [[ "$KFMAGIC" == "ARM"* || "$KFGZIP" == "1f8b" ]]; then
+            ok "kernelfile 内容 = arm64 Image / gzip"
+        else
+            bad "kernelfile 内容既非 arm64 Image 也非 gzip（boot.scr 取到也起不来）"
+        fi
+    else
+        bad "fnEnv 的 kernelfile=${KFN:-（缺失）} 在 BOOT 分区不存在 → 刷进去必黑"
+    fi
+fi
+
 # FIT 哈希门禁：镜像里 u-boot.itb 的任一 image 节点 sha256 与负载不符 →
 # SPL 直接拒载（2026-10-12 实机：boot_targets 就地补丁未重签 →
 # "sha256 error! ... SPL: failed to boot from all boot devices"）。
@@ -202,6 +237,25 @@ if [[ -n "$RP" ]]; then
         fi
         if [[ -n "$KDIR" ]]; then
             ok "内核模块目录存在: $(basename "$KDIR")"
+            # OTA 自愈四件（换内核后自动重编树外模块；用户要求"OTA 不能死"）
+            # 这是产物侧断言：源码断言过了但没进镜像时，照样要拦住。
+            for f in usr/src/kickpi-k1-modules/maxio.c \
+                     usr/src/kickpi-k1-modules/wifi-src.tar.gz \
+                     usr/local/sbin/kickpi-k1-modules-ensure.sh \
+                     etc/systemd/system/kickpi-k1-modules-ensure.service; do
+                [[ -e "$MNT_R/$f" ]] && ok "OTA 自愈件在位: $f" \
+                    || bad "OTA 自愈件缺失: $f（换内核后树外模块不会自愈）"
+            done
+            [[ -L "$MNT_R/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules-ensure.service" ]] \
+                && ok "OTA 自愈单元已 enable（sysinit.target.wants）" \
+                || bad "OTA 自愈单元未 enable（换内核后不自愈）"
+            # 唯一源码目录（2026-10-27 整理）：老的第二套目录若残留，说明镜像里有两套自愈逻辑
+            [[ -e "$MNT_R/usr/src/kickpi-k1" ]] \
+                && bad "残留第二套源码目录 /usr/src/kickpi-k1（已废弃，镜像不应带）" \
+                || ok "无第二套源码目录（自愈逻辑唯一）"
+            [[ -e "$MNT_R/usr/local/sbin/kickpi-k1-build-modules.sh" ]] \
+                && bad "残留废弃脚本 kickpi-k1-build-modules.sh（编译逻辑应只有 modules-ensure.sh）" \
+                || ok "无废弃编译脚本"
             # EXPECT_MODULES=0 = 本轮只验引导链（with_modules=false）→ 跳过模块/固件/加载链断言
             if [[ "${EXPECT_MODULES:-}" == "0" ]]; then
                 echo "       （EXPECT_MODULES=0：只验引导链，跳过模块/固件断言）"

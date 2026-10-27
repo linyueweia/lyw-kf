@@ -34,10 +34,10 @@ umount_safe() {
 }
 
 BASE="${BASE:?需要 BASE=<飞牛基镜像 .img>}"
-# u-boot：恒用基镜像自带引导件（2026-10-08 实测结论，详见 workflow 同名注释）：
-#   自建对（DDR v1.26 + U-Boot 2023.10）SPL 阶段即断（电源灯亮系统灯不亮）；
-#   基镜像 v1.23-03ea844c5d 与本板 eMMC 原厂同版本同哈希。UBOOT_DIR 覆盖
-#   机制与自建素材已按「跟官方原生走」原则删除。
+# u-boot：默认用 uboot/k1-ki-first32m.bin（由 lyw-ki 仓构建的 K1 iStoreOS 引导件，
+#   U-Boot 2025.10-OpenWrt-r33609 + ddr-v1.23-03ea844c5d，boot_targets 本就 mmc 优先），
+#   由 workflow 通过 UBOOT= 传入；不传则保留基镜像自带前导区（v1.0.0 回滚场景）。
+#   注入只写载荷区 [17408, 32MiB)，GPT 必保留。
 DTB="${DTB:?需要 DTB=<rk3568-kickpi-k1.dtb>}"
 MODULES_DIR="${MODULES_DIR:-}"
 # 产物命名（2026-10-15 用户定案）：fnos_<地区>_<架构>_<Debian主版本>_<板型>.img
@@ -55,8 +55,9 @@ OUT_DIR="${OUT_DIR:-$(pwd)/out}"
 BOOT_MNT=/mnt/k1fnos_boot
 ROOT_MNT=/mnt/k1fnos_root
 # 内核版本不写死：从基镜像 BOOT 分区里的 vmlinuz-* / config-* 自动探测。
-# 教训：社区内核包是 6.18.18-trim，而飞牛基镜像自带的是 6.18.18.c951-trim，
-#       两者的 vermagic 不同，用错版本编出的 .ko 一个都加载不了。
+# 教训：社区内核包是 6.18.18-trim，而飞牛基镜像自带的是 6.18.18.cNNN-trim
+#       （v1.1.0 = c1145；c951 是上一版基镜像），两者的 vermagic 不同，
+#       用错版本编出的 .ko 一个都加载不了。
 KREL="${KREL:-}"
 
 fail() { echo "✗ $*" >&2; exit 1; }
@@ -202,9 +203,6 @@ if [[ -z "$KREL" ]]; then
     [[ -z "$KREL" ]] && KREL="$(ls "$BOOT_MNT" 2>/dev/null | sed -n 's/^config-//p' | head -1)"
 fi
 [[ -n "$KREL" ]] || fail "无法从 BOOT 分区探测内核版本"
-if [[ ! -f "$BOOT_MNT/vmlinuz-$KREL" && ! -f "$BOOT_MNT/vmlinuz" ]]; then
-    warn_keep=1
-fi
 echo "  内核版本(KREL) = $KREL"
 echo "  BOOT 分区里的内核/配置: $(ls "$BOOT_MNT" | grep -E '^(vmlinuz|config|System.map)' | tr '\n' ' ')"
 
@@ -212,8 +210,9 @@ DTB_NAME="$(basename "$DTB")"
 mkdir -p "$BOOT_MNT/dtb/rockchip"
 cp -f "$DTB" "$BOOT_MNT/dtb/rockchip/$DTB_NAME"
 
-# 保留基镜像原有 fnEnv.txt 的字段（如 kernelfile=），只改/增 fdtfile。
-# 理由：飞牛的 boot.scr 依赖 fnEnv 里的 kernelfile 等键，整份覆盖会把引导搞坏。
+# 保留基镜像原有 fnEnv.txt 的字段（kernelfile= 等），只改/增 fdtfile。
+# 理由：飞牛的 boot.scr 依赖 fnEnv 里的 kernelfile 等键，整份覆盖会把引导搞坏
+#      （xck-nas 2026-10-27 实测：整份覆盖把 kernelfile 钉死在旧内核名上 → 刷进去必黑）。
 if [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
     echo "  ── 基镜像原有 fnEnv.txt（保留其字段）──"
     sed 's/^/     /' "$BOOT_MNT/fnEnv.txt"
@@ -224,7 +223,7 @@ else
 verbosity=1
 bootlogo=false
 console=both
-extraargs=cma=1G
+extraargs=cma=256M
 fdtfile=rockchip/$DTB_NAME
 EOF
 fi
@@ -239,13 +238,64 @@ fi
 # 要回退旧内核时改 fnEnv.txt 的 kernelfile=/vmlinuz-<旧内核> 即可（官方键）。
 # 之前仓库自造的 extlinux.conf 是静态 root=PARTUUID=（构建期读到的值，继承自官方
 # 基镜像、所有产物都一样），u-boot 又优先走 extlinux → TF 卡与 eMMC 双介质并存会串盘。
-K1_EXTRAARGS="cma=1G loglevel=7 ignore_loglevel"
+# CMA 与官方 R5S 对齐 = **256M**（2026-10-27 定案）：官方 R5S 的 fnEnv.txt 就是
+# extraargs=cma=256M，官方 DTB 里也没有 reserved-memory CMA 区 —— cmdline 的 cma= 是
+# 唯一决定因素。历史 1G 只是绕开相册 AI 的 339MB 连续申请，不是官方形态，不要放大回去。
+K1_EXTRAARGS="cma=256M loglevel=7 ignore_loglevel"
 if grep -q '^extraargs=' "$BOOT_MNT/fnEnv.txt"; then
     grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
     { cat /tmp/_fnenv.keep; echo "extraargs=$K1_EXTRAARGS"; } > "$BOOT_MNT/fnEnv.txt"
 else
     echo "extraargs=$K1_EXTRAARGS" >> "$BOOT_MNT/fnEnv.txt"
 fi
+
+# ── 硬门禁 1：kernelfile 必须指向真实存在、且确是 arm64 内核的文件 ─────────────
+# 这是"刷进去必黑"的真实事故类（xck-nas 2026-10-27：fnEnv 被整份覆盖成旧内核名 →
+# boot.scr 按名取不到内核 → 黑屏、串口零输出、无任何报错）。规则：
+#   · 缺 kernelfile= → 补 vmlinuz（官方软链）；没有软链就取唯一的 vmlinuz-*；
+#   · 指向的文件不存在 → 自动改成本板唯一的 vmlinuz-*，一个都没有则硬失败；
+#   · 目标必须 >5MB，且是 ARM64 Image（偏移 0x38 = "ARM\x64"）或 gzip。
+KF_LINE="$(grep -m1 '^kernelfile=' "$BOOT_MNT/fnEnv.txt" || true)"
+KF_NAME="${KF_LINE#kernelfile=}"; KF_NAME="${KF_NAME#/}"
+if [[ -z "$KF_NAME" ]]; then
+    if [[ -e "$BOOT_MNT/vmlinuz" ]]; then
+        KF_NAME="vmlinuz"
+    else
+        KF_NAME="$(cd "$BOOT_MNT" && ls -1 vmlinuz-* 2>/dev/null | head -1 || true)"
+        [[ -n "$KF_NAME" ]] || fail "BOOT 分区没有任何内核文件（fnEnv 也没写 kernelfile）→ 刷进去必黑"
+    fi
+    echo "kernelfile=$KF_NAME" >> "$BOOT_MNT/fnEnv.txt"
+    echo "  ✓ fnEnv 缺 kernelfile，已补 $KF_NAME"
+fi
+if [[ ! -e "$BOOT_MNT/$KF_NAME" ]]; then
+    ALT="$(cd "$BOOT_MNT" && ls -1 vmlinuz-* 2>/dev/null | head -1 || true)"
+    [[ -n "$ALT" ]] || fail "fnEnv 的 kernelfile=$KF_NAME 不存在，且 BOOT 分区没有 vmlinuz-* 可替换 → 刷进去必黑"
+    grep -v '^kernelfile=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
+    { cat /tmp/_fnenv.keep; echo "kernelfile=$ALT"; } > "$BOOT_MNT/fnEnv.txt"
+    echo "  ⚠ fnEnv 的 kernelfile=$KF_NAME 不存在，已自动改为 $ALT（基镜像换版后未同步）"
+    KF_NAME="$ALT"
+fi
+KF_REAL="$(readlink -f "$BOOT_MNT/$KF_NAME")"
+KF_SIZE="$(stat -c%s "$KF_REAL" 2>/dev/null || echo 0)"
+[[ "$KF_SIZE" -gt 5242880 ]] || fail "kernelfile=$KF_NAME 只有 $KF_SIZE 字节（<5MB），不是完整内核 → 刷进去必黑"
+KF_KIND="$(python3 - "$KF_REAL" <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read(0x10000)
+if d[:2] == b'\x1f\x8b':
+    print('gzip')
+elif d[0x38:0x3c] == b'ARM\x64':
+    print('arm64-Image')
+else:
+    print('unknown')
+PY
+)"
+[[ "$KF_KIND" != "unknown" ]] || fail "kernelfile=$KF_NAME 既不是 arm64 Image 也不是 gzip → 不是内核（刷进去必黑）"
+echo "  ✓ kernelfile=$KF_NAME（$KF_KIND，$KF_SIZE 字节）"
+
+# ── 硬门禁 2：extraargs 的 CMA 必须与官方 R5S 口径一致（256M），禁止漂移 ────────
+grep -q '^extraargs=.*cma=256M' "$BOOT_MNT/fnEnv.txt" \
+    || fail "fnEnv extraargs 的 cma 不是 256M（官方 R5S 口径）：$(grep '^extraargs=' "$BOOT_MNT/fnEnv.txt")"
+echo "  ✓ extraargs 的 cma=256M（与官方 R5S 对齐）"
 # 历史构建残留/回退用的 extlinux.conf：改名即不参与引导（u-boot 只认该文件名）
 if [[ -f "$BOOT_MNT/extlinux/extlinux.conf" ]]; then
     mv -f "$BOOT_MNT/extlinux/extlinux.conf" "$BOOT_MNT/extlinux/extlinux.conf.k1-off"
@@ -257,7 +307,7 @@ cat > "$BOOT_MNT/extlinux/extlinux.conf.k1-static" <<EOF
 label fnOS (KICKPI K1)
     kernel /vmlinuz
     fdt /dtb/rockchip/$DTB_NAME
-    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=1G root=PARTUUID=$ROOT_PARTUUID rw rootwait
+    append earlycon=uart8250,mmio32,0xfe660000 console=ttyS2,1500000 splash=verbose cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cma=256M root=PARTUUID=$ROOT_PARTUUID rw rootwait
 EOF
 
 echo "  ── 引导配置（官方 fnEnv.txt，boot.scr 现场取 PARTUUID）──"
@@ -414,8 +464,7 @@ SOFTEOF
     done
     install -D -m 0644 "$REPO_ROOT/modules/src/maxio.c"         "$ROOT_MNT/usr/src/kickpi-k1-modules/maxio.c"
     install -D -m 0644 "$REPO_ROOT/modules/wifi-src.tar.gz"     "$ROOT_MNT/usr/src/kickpi-k1-modules/wifi-src.tar.gz"
-    install -D -m 0644 "$REPO_ROOT/modules/wifi-src.tar.gz.ORIGIN" \
-        "$ROOT_MNT/usr/src/kickpi-k1-modules/wifi-src.tar.gz.ORIGIN"
+    # 来源说明留在仓库（modules/src/WIFI-SRC-ORIGIN.txt），不进镜像 —— 镜像里只放能编的东西
     install -D -m 0755 "$REPO_ROOT/modules/ota/modules-ensure.sh" \
         "$ROOT_MNT/usr/local/sbin/kickpi-k1-modules-ensure.sh"
     install -D -m 0644 "$REPO_ROOT/modules/ota/kickpi-k1-modules-ensure.service" \
@@ -584,7 +633,7 @@ WRAP
         if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
             if ! grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt"; then
                 grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-                { cat /tmp/_fnenv.keep; echo "extraargs=cma=1G loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
+                { cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
                 echo "  ✓ fnEnv extraargs 已含 loglevel=7 ignore_loglevel"
             fi
             sync
@@ -681,36 +730,19 @@ WRAP
         [[ "$_n" == "3" ]] || fail "kickpi-k1-modules.service ExecStart 分词成 $_n 项（应为 3）→ sh -c 只会跑第一条命令"
     fi
     [[ -f "$OSFIX/etc/modprobe.d/kickpi-k1.conf" ]] || fail "缺 modprobe.d softdep（maxio 先于 dwmac_rk）"
-    # (5) 【在线更新防护】板级模块源码 + 按运行内核自愈（2026-10-12 实机根因修复）
-    # 飞牛在线更新会安装新内核（c951-trim → c1145-trim 实测），旧做法把 .ko 注入到
-    # 构建期那一个内核目录、服务里写死 release，于是更新后：
-    #   /usr/lib/modules/<新内核>/updates/kickpi-k1/ 不存在 → maxio(PHY) 不加载
-    #   → 双网口全灭。改成【模块跟着内核走】：
-    #   · 源码进 /usr/src/kickpi-k1/，本机 gcc/make 就能编（基镜像已带 build-essential）
-    #   · /etc/kernel/postinst.d/zz-kickpi-k1-modules 每装一个新内核就自动重编并装好
-    #   · 开机服务按 uname -r 定位 + 头文件未就绪时留标记、开机补编
-    #   · 引导走官方 boot.scr：kernelfile=vmlinuz 软链跟随最新内核（在线更新天然兼容）
-    install -Dm755 "$ASSETS/kickpi-k1-build-modules.sh" "$OSFIX/usr/local/sbin/kickpi-k1-build-modules.sh"
+    # (5) 【在线更新防护】板级模块自愈 —— 2026-10-27 整理：全仓只保留一套实现
+    # 飞牛在线更新会装新内核，旧 .ko 的 vermagic 绑死旧 release → 网口退化/WiFi 消失。现行链路：
+    #   · 源码：/usr/src/kickpi-k1-modules/{maxio.c,wifi-src.tar.gz}（上面 4) 段注入，唯一一处）
+    #   · 编译：/usr/local/sbin/kickpi-k1-modules-ensure.sh（唯一实现；接受内核 release 参数）
+    #   · 触发：/etc/kernel/postinst.d/zz-kickpi-k1-modules（装内核即编）+ 开机
+    #           kickpi-k1-modules.service（按 uname -r 定位，头文件晚到也能补编）
+    #   · 加载：/usr/local/sbin/kickpi-k1-load-modules（唯一入口；modules-load.d/softdep 为二重保险）
+    # 历史（已删除，别再捡回来）：第二套源码目录 /usr/src/kickpi-k1/ + 第二套编译脚本
+    #   assets/kickpi-k1-build-modules.sh + 构建期 git clone 上游 —— 与仓内 wifi-src.tar.gz 重复、
+    #   且让构建依赖外网（离线不可复现）。
     install -Dm755 "$ASSETS/kickpi-k1-load-modules"     "$OSFIX/usr/local/sbin/kickpi-k1-load-modules"
     install -Dm755 "$ASSETS/zz-kickpi-k1-modules"       "$OSFIX/etc/kernel/postinst.d/zz-kickpi-k1-modules"
-    mkdir -p "$OSFIX/usr/src/kickpi-k1"
-    cp -f "$(dirname "$0")/modules/src/maxio.c" "$OSFIX/usr/src/kickpi-k1/maxio.c"
-    # SWT6621S 源（与 build-modules.sh 同源同补丁）；拿不到只影响 WiFi/BT，不算致命
-    if command -v git >/dev/null 2>&1; then
-        WIFISRC="${WIFI_SRC:-https://github.com/retro98boy/seekwave-swt6621s}"
-        if git clone --depth 1 "$WIFISRC" "$OSFIX/usr/src/kickpi-k1/swt6621s" >/dev/null 2>&1; then
-            if git -C "$OSFIX/usr/src/kickpi-k1/swt6621s" apply "$(dirname "$0")/patches/wifi-6.18-port.patch" >/dev/null 2>&1; then
-                echo "  ✓ 已注入板级模块源（maxio + SWT6621S 已打 6.18 补丁）"
-            else
-                echo "  ⚠ SWT6621S 补丁应用失败，WiFi/BT 无法随内核自愈（网口不受影响）"
-            fi
-        else
-            echo "  ⚠ 拉取 SWT6621S 源失败，WiFi/BT 无法随内核自愈（网口不受影响）"
-        fi
-    else
-        echo "  ⚠ 无 git，跳过注入 SWT6621S 源"
-    fi
-    # 开机单元改为按【运行内核】定位（覆盖前面写死 release 的版本）
+    # 开机单元按【运行内核】定位（覆盖前面写死 release 的版本）
     cat > "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" <<'K1EOF'
 [Unit]
 Description=Load KICKPI K1 board modules for the RUNNING kernel (self-heal on new kernel)
@@ -722,17 +754,22 @@ After=local-fs.target
 Type=oneshot
 RemainAfterExit=yes
 # uname -r 在这里是 sh 展开，systemd 不做变量替换 → 始终作用于当前运行内核。
-ExecStart=/bin/sh -c "/usr/local/sbin/kickpi-k1-build-modules.sh $(uname -r); /usr/local/sbin/kickpi-k1-load-modules; /sbin/modprobe dwmac_rk"
+# 先按运行内核补编（幂等：四件都已是本版就秒过），再加载，最后确保两个 GMAC 驱动在位。
+ExecStart=/bin/sh -c "/usr/local/sbin/kickpi-k1-modules-ensure.sh; /usr/local/sbin/kickpi-k1-load-modules; /sbin/modprobe dwmac_rk"
 
 [Install]
 WantedBy=sysinit.target
 K1EOF
     ln -sf ../kickpi-k1-modules.service \
         "$OSFIX/etc/systemd/system/sysinit.target.wants/kickpi-k1-modules.service"
-    echo "  ✓ 已装板级模块自愈链（源码 + postinst 钩子 + 按 uname -r 的开机单元）"
+    echo "  ✓ 已装板级模块自愈链（唯一源码目录 + postinst 钩子 + 按 uname -r 的开机单元）"
+    [[ -x "$OSFIX/usr/local/sbin/kickpi-k1-modules-ensure.sh" ]] \
+        || fail "自愈脚本 kickpi-k1-modules-ensure.sh 未就位"
     [[ -x "$OSFIX/etc/kernel/postinst.d/zz-kickpi-k1-modules" ]] \
         || fail "zz-kickpi-k1-modules 未就位（新内核装完不会自动重编板级模块 → 更新后网口全灭）"
-    [[ -f "$OSFIX/usr/src/kickpi-k1/maxio.c" ]] || fail "maxio.c 源未注入（设备端无法随内核重编）"
+    [[ -f "$OSFIX/usr/src/kickpi-k1-modules/maxio.c" ]] || fail "maxio.c 源未注入（设备端无法随内核重编）"
+    [[ -f "$OSFIX/usr/src/kickpi-k1-modules/wifi-src.tar.gz" ]] || fail "WiFi/BT 源码未注入（换内核后 WiFi 无法自愈）"
+    [[ ! -e "$OSFIX/usr/src/kickpi-k1" ]] || fail "残留第二套源码目录 /usr/src/kickpi-k1（已废弃，会误导诊断）"
     grep -qs 'uname -r' "$OSFIX/etc/systemd/system/kickpi-k1-modules.service" \
         || fail "kickpi-k1-modules.service 未按 uname -r 定位（在线更新后会加载不到模块）"
 

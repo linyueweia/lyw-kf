@@ -1,11 +1,13 @@
 #!/bin/sh
-# KICKPI K1：内核安装/升级后，自动把板级树外模块（maxio PHY + SWT6621S WiFi/BT）
-# 对【新内核】重编并装好，这样飞牛在线更新内核后网口不会消失。
+# KICKPI K1：内核安装/升级后，自动把板级树外模块（maxio PHY + SWT6621S WiFi/BT 三件）
+# 对【新内核】重编并装好，这样飞牛在线更新内核后网口/WiFi 不会消失。
 #
 # 由 /etc/kernel/postinst.d 在每次 linux-image-*/linux-modules-* 安装后调用。
 # 参数：$1 = 内核 release（如 6.18.18.c1145-trim）
 #
-# 注意：只在真实系统里跑；debootstrap/chroot 环境跳过（那里编不了）。
+# 2026-10-27 整理：编译逻辑只保留一份 —— 全部委托给
+#   /usr/local/sbin/kickpi-k1-modules-ensure.sh <release>
+# （历史上有第二套 build-modules.sh + 第二个源码目录，已删除，避免两套逻辑各编一遍）
 set -e
 
 REL="${1:-}"
@@ -17,10 +19,10 @@ if [ "$(stat -c %d /)" != "$(stat -c %d /proc/1/root 2>/dev/null || echo same)" 
     exit 0
 fi
 
-[ -x /usr/local/sbin/kickpi-k1-build-modules.sh ] || exit 0
+[ -x /usr/local/sbin/kickpi-k1-modules-ensure.sh ] || exit 0
 
 mkdir -p /var/lib/kickpi-k1
-# 头文件包常常晚于内核包安装：这里拿不到 /lib/modules/<rel>/build 时留标记，
+# 头文件包常常晚于内核包安装：拿不到 /lib/modules/<rel>/build 时留标记，
 # 开机时 kickpi-k1-modules.service 会补编（不会出现"更新完就永远缺模块"）。
 if [ ! -d "/lib/modules/$REL/build" ]; then
     echo "kickpi-k1: $REL 头文件未就绪，标记待补编"
@@ -29,9 +31,9 @@ if [ ! -d "/lib/modules/$REL/build" ]; then
 fi
 
 echo "kickpi-k1: 为内核 $REL 构建板级模块…"
-if /usr/local/sbin/kickpi-k1-build-modules.sh "$REL"; then
+if /usr/local/sbin/kickpi-k1-modules-ensure.sh "$REL"; then
     rm -f "/var/lib/kickpi-k1/needs-build-$REL"
-    echo "kickpi-k1: $REL 板级模块就绪"
+    echo "kickpi-k1: $REL 板级模块就绪（详见 /var/log/kickpi-k1-modules-ensure.log）"
 else
     date '+%F %T' > "/var/lib/kickpi-k1/needs-build-$REL"
     echo "kickpi-k1: $REL 构建未完全成功（已标记，开机自愈会重试）" >&2

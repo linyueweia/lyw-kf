@@ -867,14 +867,14 @@
 		downdifferential = <0x0a>;
 		upthreshold = <0x28>;
 		reg = <0x00 0xfde60000 0x00 0x4000>;
-		interrupts = <0x00 0x28 0x04 0x00 0x29 0x04 0x00 0x27 0x04>;
-		interrupt-names = "job", "mmu", "gpu";
+		interrupts = <0x00 0x27 0x04 0x00 0x29 0x04 0x00 0x28 0x04>;
+		interrupt-names = "gpu", "mmu", "job";
 		clocks = <&{/firmware/scmi/protocol@14} 0x01 &{/clock-controller@fdd20000} 0x1b>;
 		clock-names = "gpu", "bus";
 		#cooling-cells = <0x02>;
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x07>;
 		status = "okay";
-		operating-points-v2 = <&{/opp-table2}>;
+		operating-points-v2 = <&{/opp-table-1}>;
 		mali-supply = <&{/i2c@fdd40000/pmic@20/regulators/DCDC_REG2}>;
 
 		power-model {
@@ -905,6 +905,7 @@
 		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdea0800 0x00 0x40>;
 		interrupts = <0x00 0x8a 0x04>;
+		interrupt-names = "vdpu_mmu";
 		clock-names = "aclk\0iface";
 		clocks = <0x0f 0xee 0x0f 0xef>;
 		power-domains = <0x10 0x0b>;
@@ -921,12 +922,21 @@
 		resets = <&{/clock-controller@fdd20000} 0x126 &{/clock-controller@fdd20000} 0x124 &{/clock-controller@fdd20000} 0x125>;
 		reset-names = "core", "axi", "ahb";
 		power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
-		clock-names = "aclk_rga", "hclk_rga", "clk_rga";
+		clock-names = "aclk", "hclk", "sclk";
 		interrupts = <0x00 0x5a 0x04>;
 		clocks = <&{/clock-controller@fdd20000} 0xf3 &{/clock-controller@fdd20000} 0xf4 &{/clock-controller@fdd20000} 0xf5>;
-		reg = <0x00 0xfdeb0000 0x00 0x1000>;};
+		reg = <0x00 0xfdeb0000 0x00 0x180>;};
 
-	video-codec@fdee0000 {
+	rk_rga@fdeb0000 {
+		compatible = "rockchip,rga2";
+		reg = <0x00 0xfdeb0000 0x00 0x1000>;
+		interrupts = <0x00 0x5a 0x04>;
+		clocks = <&{/clock-controller@fdd20000} 0xf3 &{/clock-controller@fdd20000} 0xf4 &{/clock-controller@fdd20000} 0xf5>;
+		clock-names = "aclk_rga", "hclk_rga", "clk_rga";
+		power-domains = <&{/power-management@fdd90000/power-controller} 0x0a>;
+		status = "okay";};
+
+	vepu@fdee0000 {
 		compatible = "rockchip,vpu-encoder-v2";
 		phandle = <0x103>;
 	
@@ -948,6 +958,7 @@
 		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdee0800 0x00 0x40>;
 		interrupts = <0x00 0x3f 0x04>;
+		interrupt-names = "vepu_mmu";
 		clocks = <0x0f 0xfd 0x0f 0xfe>;
 		clock-names = "aclk\0iface";
 		power-domains = <0x10 0x0a>;
@@ -964,6 +975,7 @@
 		compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
 		reg = <0x00 0xfdf80800 0x00 0x40 0x00 0xfdf80840 0x00 0x40>;
 		interrupts = <0x00 0x5c 0x04>;
+		interrupt-names = "rkvdec_mmu";
 		clocks = <0x0f 0x108 0x0f 0x109>;
 		clock-names = "aclk\0iface";
 		power-domains = <0x10 0x0d>;
@@ -5027,41 +5039,6 @@
 		};
 	};
 
-	opp-table-1 {
-		compatible = "operating-points-v2";
-		phandle = <0x47>;
-
-		opp-200000000 {
-			opp-hz = <0x00 0xbebc200>;
-			opp-microvolt = <0xcf850 0xcf850 0xf4240>;
-		};
-
-		opp-300000000 {
-			opp-hz = <0x00 0x11e1a300>;
-			opp-microvolt = <0xcf850 0xcf850 0xf4240>;
-		};
-
-		opp-400000000 {
-			opp-hz = <0x00 0x17d78400>;
-			opp-microvolt = <0xcf850 0xcf850 0xf4240>;
-		};
-
-		opp-600000000 {
-			opp-hz = <0x00 0x23c34600>;
-			opp-microvolt = <0xdbba0 0xdbba0 0xf4240>;
-		};
-
-		opp-700000000 {
-			opp-hz = <0x00 0x29b92700>;
-			opp-microvolt = <0xe7ef0 0xe7ef0 0xf4240>;
-		};
-
-		opp-800000000 {
-			opp-hz = <0x00 0x2faf0800>;
-			opp-microvolt = <0xf4240 0xf4240 0xf4240>;
-		};
-	};
-
 	sata@fc000000 {
 		compatible = "rockchip,rk3568-dwc-ahci\0snps,dwc-ahci";
 		reg = <0x00 0xfc000000 0x00 0x1000>;
@@ -5570,7 +5547,7 @@
 		vpu = "/video-codec@fdea0400";
 		vdpu_mmu = "/iommu@fdea0800";
 		rga = "/rga@fdeb0000";
-		vepu = "/video-codec@fdee0000";
+		vepu = "/vepu@fdee0000";
 		vepu_mmu = "/iommu@fdee0800";
 		vdec_mmu = "/iommu@fdf80800";
 		vicap = "/video-capture@fdfe0000";
@@ -6790,6 +6767,7 @@
 	rockchip,pvtm-voltage-sel = <0x00 0x14820 0x00 0x14821 0x153d8 0x01 0x153d9 0x16378 0x02 0x16379 0x186a0 0x03>;
 	rockchip,temp-hysteresis = <0x1388>;
 	rockchip,supported-hw;
+	rockchip,init-freq = <0x0dbba0>;
 	mbist-vmin = <0xc96a8 0xdbba0 0xe7ef0>;
 	opp-300000000 {
 	opp-microvolt = <0xcf850 0xcf850 0xf4240>;
@@ -6880,7 +6858,7 @@
 	reg = <0x00 0xfde40000 0x00 0x10000>;
 	reset-names = "srst_a", "srst_h";
 	operating-points-v2 = <&{/npu-opp-table}>;};
-	opp-table2 {
+	opp-table-1 {
 	rockchip,pvtm-ch = <0x00 0x05>;
 	nvmem-cells = <&{/efuse@fe38c000/nvmem-layout/gpu-leakage@1d} &{/efuse@fe38c000/nvmem-layout/core-pvtm@2a} &{/efuse@fe38c000/nvmem-layout/mbist-vmin@9} &{/efuse@fe38c000/nvmem-layout/gpu-opp-info@3c} &{/efuse@fe38c000/nvmem-layout/specification-serial-number@7} &{/efuse@fe38c000/nvmem-layout/remark-spec-serial-number@56}>;
 	rockchip,low-temp = <0x00>;

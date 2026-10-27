@@ -23,9 +23,9 @@ on:
         default: "fnnas-official-arm64-image_rockchip.img.gz"
         type: string
       base_image_sha256:
-        description: "基镜像(解压后) sha256 —— 换基镜像版本时必须同步更新，否则装配硬失败"
+        description: "基镜像(解压后) sha256；留空=以 release 的 SHA256SUMS 为准（推荐）；填了就必须一致"
         required: false
-        # v1.1.0 的 CI 实测解压 sha256 —— 首发后回填，回填前留空跳过断言
+        # 留空时用 release 随附 SHA256SUMS 做 gz+raw 双校验；填了再加一道显式断言。
         default: ""
         type: string
       with_modules:
@@ -39,8 +39,18 @@ on:
       - "dts/**"
       - "dist/**"
       - "modules/**"
+      - "uboot/**"
+      # assets/** 与 tools/** 直接决定镜像内容与门禁：漏掉它们会出现"改了修复件却没重出镜像"
+      - "assets/**"
+      - "tools/**"
       - "*.sh"
       - ".github/workflows/**"
+
+# 同一分支只保留一条镜像流水线：重复 dispatch / 连续 push 时取消上一条，
+# 避免同一 sha 并行跑两条全量构建（2026-10-26 run #67/#68 就是这么白跑两条的）。
+concurrency:
+  group: kf-image-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -82,6 +92,13 @@ jobs:
           sudo apt-get install -y -qq xz-utils btrfs-progs device-tree-compiler \
                                      qemu-user-static file kmod libelf-dev flex bison \
                                      gcc-aarch64-linux-gnu
+
+      - name: Boot-arg gate self-test (kernelfile 形态 + cma=256M)
+        run: |
+          set -e
+          # 这两条门禁只在装配真正挂镜像时才跑到 —— 全量构建 90 分钟，先用临时目录跑单元测试
+          chmod +x tools/tests/kf-boot-gate-test.sh
+          bash tools/tests/kf-boot-gate-test.sh build-k1-fnos.sh
 
       - name: Fetch and unpack fnOS base image
         run: |
@@ -175,12 +192,6 @@ jobs:
             echo "将注入 modules/ 下的 .ko（脚本会做 vermagic 硬闸，不匹配则失败）"
           fi
 
-      - name: Repo static gates (eMMC 劫持 / DTB 同步 / 网口+媒体 DT 门禁)
-        run: |
-          set -e
-          chmod +x tools/verify-repo-static.sh tools/verify-k1-net-dts.sh tools/verify-k1-media-dts.sh
-          bash tools/verify-repo-static.sh
-
       - name: Build DTB in fnOS kernel tree（树内编译 + SoC 一致性门禁）
         run: |
           set -e
@@ -188,6 +199,14 @@ jobs:
           ls -la dist/
           echo "── dist DTB 摘要 ──"
           dtc -I dtb -O dts dist/rk3568-kickpi-k1.dtb 2>/dev/null | head -12
+
+      # 顺序很重要：DTB 先现编，门禁再判【本次真正装进镜像的那份 DTB】。
+      # 旧顺序（门禁在前、现编在后）在"改 dts 但还没回提交 dist"时会判到上一版件。
+      - name: Repo static gates (eMMC 劫持 / DTB 同步 / 媒体簇对标 R5S / 网口+媒体 DT 门禁)
+        run: |
+          set -e
+          chmod +x tools/verify-repo-static.sh tools/verify-k1-net-dts.sh tools/verify-k1-media-dts.sh tools/r5s-media-parity.py
+          bash tools/verify-repo-static.sh
 
       - name: Assemble fnOS image
         run: |
@@ -275,7 +294,9 @@ jobs:
           name: fnOS KICKPI K1 #${{ github.run_number }}
           body: |
             为 KICKPI K1 V1.2 (RK3568B2) 构建的飞牛 fnOS ARM64 镜像。
-            合并：先机 DTB + 本板 maxio.ko(SWT6621S WiFi/BT 模块)
+            装配：本板 DTB（媒体簇逐节点对标官方 R5S）+ 本板 maxio.ko + SWT6621S WiFi/BT 三件套
+            + OTA 自愈素材（换内核后自动重编四个树外模块）。
+            引导参数与官方 R5S 对齐：extraargs=cma=256M。
             引导链六环静态验证已通过。上机前请确认刷写目标是 SD 卡。
           files: |
             out/*.img.xz

@@ -31,15 +31,16 @@
 | 内存 | LPDDR4 **1560 MHz**（freq_0=0x618） | 实机 |
 | 启动介质 | TF=`mmcblk1` 启动；eMMC=`mmcblk0` | 实机 |
 | 双网口 | `end0`=fe2a0000.gmac0、`end1`=fe010000.gmac1，PHY **Maxio MAE0621A**（phy_id 0x7b744411，RGMII） | 实机+三方对照 |
-| u-boot | 基镜像自带 armbian U-Boot 2026.04-TRIM-c218，**DDR v1.23-03ea844c5d**（=本板 eMMC 原厂同哈希） | workflow 实测结论 2026-10-08 |
-| 基镜像 | 分区：BOOT(ext2, 65536s 起) + rootfs(btrfs)；内核 `6.18.18.c951-trim`（社区包 `6.18.18-trim` 后缀不同=vermagic 不同） | |
-| WiFi/BT | seekwave SWT6621S（SDIO），官方内核自带 `updates/trim/seekwave-swt6621s/` | |
+| u-boot | `uboot/k1-ki-first32m.bin` = **lyw-ki 仓构建的 K1 iStoreOS 引导件**（U-Boot 2025.10-OpenWrt-r33609，**DDR v1.23-03ea844c5d** = 本板 eMMC 原厂同版本；`boot_targets` 本就 mmc 优先；含 `fdt_fixup_memory`），注入载荷区 [17408,32MiB) | 2026-10-26/27 三仓统一 |
+| 基镜像 | `linyueweia/fnnas-base-images` latest（当前 v1.1.0）；分区 BOOT(ext4, 65536s 起) + rootfs(btrfs)；内核从基镜像取（v1.1.0 = `6.18.18.c1145-trim`；社区包 `6.18.18-trim` 后缀不同=vermagic 不同） | CI 实测 |
+| WiFi/BT | seekwave SWT6621S（SDIO）；驱动**飞牛内核不带**，四件（maxio + WiFi/BT 三件）由本仓源码随镜像下发 + OTA 自愈重编 | 2026-10-27 实机 |
 | NPU | rknpu，`/dev/dri/card1`（root:video 660），推理须 root（fnOS ai_manager 本为 root） | |
 
 **三条基线决策（有实测背书，勿翻案）**：
-- **u-boot 不自编**：自建对（DDR v1.26 + U-Boot 2023.10）冷启动电源灯亮系统灯不亮，SPL 阶段即断；
-  基镜像 v1.23 全部成功启动用的都是它。自建素材链（`uboot/`、`build-uboot.sh`、`fetch-uboot-from-kk.sh`）已删。
-- **对照只认官方三镜像**：Armbian 是"没成功的系统"，当权威会带偏。
+- **u-boot 用「自建 iStoreOS 仓构建的引导件」**：`uboot/k1-ki-first32m.bin`（lyw-ki 仓 iStoreOS
+  构建件前 32MiB）。自己编的 radxa 2023.10 那对在 SPL 阶段就断（电源灯亮、系统灯不亮），
+  飞牛官方 2026.04-TRIM 也跑不完全链路；iStoreOS 件是**实机验证过**的那份（ddr-v1.23 + mmc 优先）。
+- **对照只认官方件**：Armbian 是"没成功的系统"，当权威会带偏；同 SoC 媒体簇只认官方 R5S 固件那句 DTB。
 - **内核不钉死**：板级能力靠模块自愈（§6），在线更新必须还能用。
 
 ---
@@ -59,6 +60,9 @@
 | 9 | CI `set: pipefail invalid option name` | API blob 直传把工作区 CRLF 入库（autocrlf 只保护本地 commit 路径） | 3 文件转 LF + `.gitattributes eol=lf` + API 推送强制 LF | `.gitattributes` |
 | 10 | 构建脚本 head 拿错 vermagic 编模块被拒 | 社区内核包后缀与基镜像不同 | release 一律取自基镜像 | `build-modules.sh` vermagic 硬闸 |
 | 11 | 网口间歇性整口 Link Down / "灯亮但拿不到 IP" | **2026-10-17 实机复现并定案**：EEE 1G 在 RK3568 dwmac + Maxio MAE0621A 上会让 RX 侧在 LPI 里疯狂进出（K1 侧 `irq_rx_path_in_lpi_mode_n` 1400 万次、`phy_eee_wakeup_error_n` 241），表现为**能发不能收**（ARP/DHCP 一直发、收不到回应，ping 100% 丢），链路 carrier 不变 | DT 的 PHY 节点写 `eee-broken-1000t`（内核 `of_set_phy_eee_broken()` 每次自协商清 1000T 通告位），只关 1G EEE；**不用任何用户态件** | `dts/rk3568-kickpi-k1.dts`（两个 PHY）+ `dist` DTB 现编 + `tools/verify-k1-net-dts.sh` 硬门禁 |
+| 12 | 媒体簇（GPU/VPU/RGA/NPU）与官方 R5S 形态漂移 | 板级 DTS 是从厂商 BSP 反编译的平铺 dump，节点名/中断名/OPP 表会与官方件不一致 | **逐节点对标官方 R5S 参照 DTB**（用户口径：同 SoC 不自创） | `tools/r5s-media-parity.py` + `dist/rk3568-nanopi-r5s-official.dtb` + `dts/r5s-media-allowlist.txt` |
+| 13 | 刷进去黑屏、串口零输出、无任何报错 | `fnEnv` 的 `kernelfile=` 指向不存在的内核（换基镜像/被整份覆盖时最常见；xck-nas 2026-10-27 实证） | 以基镜像 fnEnv 为底稿只改 fdtfile；kernelfile 不存在自动纠正为本板唯一 `vmlinuz-*`；硬断言「存在 + >5MB + arm64 Image/gzip」 | `build-k1-fnos.sh`（硬门禁 1）+ `verify-fnos-bootchain.sh` 产物侧同判据 |
+| 14 | CMA 口径漂移（1G / 2G 混入） | 历史上为绕开相册 AI 把 CMA 放大过 | **与官方 R5S 对齐 = 256M**（2026-10-27 用户定案），构建期+镜像门禁双断言，反向拒绝 1G/2G | `build-k1-fnos.sh`（硬门禁 2）+ `verify-fnos-bootchain.sh` + `assets/fnos-fix-log-errors.sh` |
 
 ---
 
@@ -91,9 +95,9 @@
 
 ### 3.3 坑③ vermagic：必须按基镜像 header 现编
 
-- 预编 `.ko` 是 `6.18.18-trim`，基镜像内核是 `6.18.18.c951-trim` ——差一个后缀必被拒
+- 预编 `.ko` 若来自社区包（`6.18.18-trim`）而基镜像内核是 `6.18.18.cNNN-trim` —— 差一个后缀必被拒
   （`CONFIG_MODULE_SIG/MODVERSIONS` 未开，逐字比较）。
-- `build-modules.sh` / `kickpi-k1-build-modules.sh`：release **取自基镜像**（不能拿社区包），
+- `build-modules.sh`（构建期现编，用基镜像 header）/ 设备端 `modules-ensure.sh`：release **取自基镜像**（不能拿社区包），
   编完 `modinfo` vermagic 硬闸；`depmod -b` 后断言 `modules.dep` 含 `maxio.ko`
   （历史 bug：depmod 条件恒假，从未真正跑过）。
 
@@ -183,11 +187,17 @@
 
 ## 5. 镜像装配要点（build-k1-fnos.sh）
 
-- 入参：`BASE=基镜像 DTB=dist/….dtb MODULES_DIR=built-modules`（UBOOT_DIR 已删除）。
+- 入参：`BASE=基镜像 DTB=dist/….dtb UBOOT=uboot/k1-ki-first32m.bin MODULES_DIR=built-modules`
+  （UBOOT 不传则保留基镜像自带前导区，v1.0.0 回滚场景）。
 - 安全闸：BASE 禁止 `/dev/*`（防把设备节点当镜像写）；umount 加固（sync+重试+惰性卸载）。
+- 引导硬门禁：`fnEnv` 的 `kernelfile` 必须存在/`>5MB`/是 arm64 Image 或 gzip（不存在自动纠正，
+  一个 vmlinuz 都没有则构建失败）；`extraargs` 必须含 `cma=256M`（官方 R5S 口径）。
 - 模块注入：`/usr/src/kickpi-k1/`（源码，供开机现编）+ `updates/kickpi-k1/`（预编，供首启）+
   `etc/modprobe.d` softdep + `depmod -b` 断言。
-- 固件双路径：`/lib/firmware/` 根 + `seekwave/` 子目录（驱动只认后者），各 15 文件断言。
+- OTA 自愈素材：`/usr/src/kickpi-k1-modules/{maxio.c,wifi-src.tar.gz}` +
+  `/usr/local/sbin/kickpi-k1-modules-ensure.sh` + 单元（`sysinit.target.wants` 已 enable），
+  换内核后开机自动重编四个树外模块；失败只写日志不阻塞开机。
+- 固件双路径：`/lib/firmware/` 根 + `seekwave/` 子目录（驱动只认后者），各 ≥15 文件断言。
 - 产物：`out/fnos_Mainland-PE_arm_12_Kickpi-k1.img(.xz)` + SHA256SUMS（2026-10-15 定案命名，`IMG_NAME` 可覆盖）。
 
 ---
@@ -200,7 +210,9 @@
   pinctrl `wifi-enable-h` config 换 `0xc1`（config 0x129 曾指向 i2s 节点=phandle 错乱）。
   另需 `sdmmc2 supports-sdio`、fe000000.mmc 挂 `mmc_host`。
 - **固件**：双路径注入（坑 ⑥）。
-- **三件套**：官方内核自带，不自编；`seekwave_boot_parse_dt` 读 `dma_type/gpio_chip_en` 后
+- **四件**：飞牛内核**不带** maxio 与 seekwave 三件套 → 源码随镜像下发
+  （`/usr/src/kickpi-k1-modules/`）+ 开机单元 `kickpi-k1-modules-ensure.service`；
+  `seekwave_boot_parse_dt` 读 `dma_type/gpio_chip_en` 后
   `devm_gpio_request_one(…, GPIOF_OUT_INIT_HIGH, "CHIP_EN")`。
 - **验收**：`mmc2: new UHS-I SDR104 SDIO card` → `boot sucessfull` → `wlan0` → `nmcli` 扫到 AP；
   蓝牙 `hci0` chip 0x5302。
@@ -232,6 +244,10 @@
 | vermagic / 预编 .ko | 编错内核的模块 | `build-modules.sh` 硬闸 + 静态门禁 |
 | 产物 DDR 断言 | u-boot 换错（非 v1.23 / T68M / 1056MHz） | workflow `Show outputs` |
 | 六环引导链 | 引导配置回归 | `verify-fnos-bootchain.sh` |
+| 媒体簇对标官方 R5S | 节点名/中断名/OPP 表/IOMMU 与官方件漂移（例外须登记） | `tools/r5s-media-parity.py` |
+| 媒体层防回归 | 转码死机那套（IOMMU 孤串 / vepu 死名 / OPP 挂解码核） | `tools/verify-k1-media-dts.sh` |
+| CMA = 256M / kernelfile 形态 | 引导参数漂移、"刷进去必黑" | `build-k1-fnos.sh` 硬门禁 + `verify-fnos-bootchain.sh` 产物断言 |
+| 文档与脚本可执行位 | 文档写 `./脚本.sh` 而文件是 644（照文档跑就 Permission denied） | `tools/verify-repo-static.sh` |
 | 行尾 | CRLF 入库炸 bash | `.gitattributes eol=lf`（API 推 blob 必须强制 LF） |
 
 **工程约定（吃过亏的）**：
@@ -260,17 +276,27 @@ DT 侧：`bash tools/verify-k1-net-dts.sh` 全 OK。
 
 **WiFi/BT**：`nmcli dev` 有 wlan0 且能扫 AP；`hciconfig` 有 hci0。
 **NPU**：root 跑 rknn 模型 OK + `/proc/interrupts` 122 行计数增长。
+**引导参数 / 媒体簇**：
+```bash
+grep -o 'cma=[0-9]*[MG]' /proc/cmdline   # 期望 cma=256M（官方 R5S 口径）
+grep CmaTotal /proc/meminfo               # 期望 262144 kB
+python3 tools/r5s-media-parity.py <本机 /boot/dtb 反解件>  # 期望"媒体簇逐节点一致"
+```
 **CI**：main 全绿（全部门禁通过）。
 
 ---
 
 ## 10. 相关文件索引
 
-- 构建：`build-k1-fnos.sh`、`build-modules.sh`、`.github/workflows/build-fnos-kickpi-k1.yml`
-- DT：`dts/rk3568-kickpi-k1.dts`、`dist/rk3568-kickpi-k1.dtb`（同步重编）
-- 门禁：`tools/verify-repo-static.sh`、`tools/verify-k1-net-dts.sh`、`tools/fit-resign.py`、
-  `tools/patch-uboot-boot-targets.py`、`verify-fnos-bootchain.sh`
-- 模块自愈：`assets/kickpi-k1-build-modules.sh`、`assets/zz-kickpi-k1-modules`、
-  `assets/kickpi-k1-load-modules`、`assets/kickpi-k1-modules.service.new`
+完整导览见 [docs/REPO-MAP.md](docs/REPO-MAP.md)（每个文件一行说明 + 谁消费 + 哪些是产物）。
+
+- 构建：`build-k1-fnos.sh`、`build-modules.sh`、`build-dtb.sh`、`.github/workflows/build-fnos-kickpi-k1.yml`
+- DT：`dts/rk3568-kickpi-k1.dts`、`dist/rk3568-kickpi-k1.dtb`（同步重编）、
+  `dist/rk3568-nanopi-r5s-official.dtb`（官方 R5S 参照件）、`dts/r5s-media-allowlist.txt`
+- 门禁：`tools/verify-repo-static.sh`、`tools/r5s-media-parity.py`、`tools/verify-k1-net-dts.sh`、
+  `tools/verify-k1-media-dts.sh`、`tools/fit-resign.py`、`tools/patch-uboot-boot-targets.py`、
+  `verify-fnos-bootchain.sh`、`tools/tests/kf-boot-gate-test.sh`
+- 模块自愈（唯一一套）：`modules/ota/modules-ensure.sh`（编译）、`assets/zz-kickpi-k1-modules`
+  （postinst 触发）、`assets/kickpi-k1-load-modules`（加载）
 - 复盘：`TROUBLESHOOTING.md`（串口原文/时间线/取证链）、README（双网口 5 条取证结论）
 - 取证工具：`tools/offline-read/`（Windows 免驱读 ext4/btrfs/原始盘）

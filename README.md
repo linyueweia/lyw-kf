@@ -29,29 +29,38 @@ K1 的双千兆网口用的是 **Maxio MAE0621A** PHY（PHY ID `0x7b744411`）�
 |------|------|
 | 飞牛内核模块签名 | **完全未启用**（无 `CONFIG_MODULE_SIG*`、无 lockdown）→ 自编模块可加载 |
 | 树外编模块基础 | 官方 header 包含完整内核树（`Makefile`/`Module.symvers`/`include`/`scripts`/`arch/arm64`）|
-| 实测 | `maxio.c` 对飞牛内核编译通过；**目标 release 必须取自基镜像**（`6.18.18.c951-trim`），社区包 `6.18.18-trim` 差一个后缀即被拒 |
-| vermagic 硬闸 | `build-modules.sh` 第 5 步逐个 `.ko` 比对含 `KREL`，不符即 `exit 1` |
+| 实测 | `maxio.c` 对飞牛内核编译通过；**目标 release 必须从基镜像取**（当前基镜像 v1.1.0 = `6.18.18.c1145-trim`，社区包 `6.18.18-trim` 差一个后缀即被拒）|
+| vermagic 硬闸 | `build-modules.sh` 逐 `.ko` 比较含 `KREL`，不符即 `exit 1`；`modules.dep` 用宿主 `depmod -b` 生成并断言 |
 
 ## 仓库内容
 
 ```
-dts/rk3568-kickpi-k1.dts        板级设备树源（自包含展开式，无 #include）
-dist/rk3568-kickpi-k1.dtb       预编译 DTB（改 dts 后必须用门禁同款 dtc 参数重编同步）
+dts/rk3568-kickpi-k1.dts        板级设备树源（自包含展开式，无 #include；媒体簇对标官方 R5S）
+dts/r5s-media-allowlist.txt     媒体簇对标例外清单（每条例外都要写理由/证据）
+dist/rk3568-kickpi-k1.dtb       预编译 DTB（由 CI「只编 DTB」工作流在飞牛内核树里现编回提交）
+dist/rk3568-nanopi-r5s-official.dtb  官方 R5S 参照件（媒体簇对标基准，勿改）
 
-modules/src/{maxio.c,BUILD-RECIPE.md}   Maxio PHY 驱动源 + 构建配方
-（SWT6621S 树外源不入库：装配时 git clone retro98boy/seekwave-swt6621s 并打 patches/ 补丁；
-  WiFi 已改为官方内核自带三件套，本仓库只保留 maxio 需要的源与固件）
-modules/firmware/               SWT6621S 固件 15 个（取自实机原厂系统，装配时强制注入）
-（.ko 不入库：一律由 build-modules.sh 对基镜像 header 现编，vermagic 才能对上
-  6.18.18.c951-trim；曾提交的预编 .ko 是 6.18.18-trim 社区包产物，装机必被拒）
+modules/src/{maxio.c,BUILD-RECIPE.md,WIFI-SRC-ORIGIN.txt}   Maxio PHY 驱动源 + 构建配方 + WiFi 源码来源说明
+modules/wifi-src.tar.gz         SWT6621S 整棵源码（已打 patches/ 的 6.18 补丁；装配时随镜像下发）
+modules/firmware/               SWT6621S 固件 15 个（取自实机原厂系统，装配时强制双路径注入）
+modules/ota/                    **唯一**模块自愈实现（modules-ensure.sh + systemd 单元）
+（.ko 不入库：一律由 build-modules.sh 对基镜像 header 现编，vermagic 才能对上）
 patches/wifi-6.18-port.patch    驱动移植补丁（12 文件 +64/-41，可干净应用到原始源码）
 
-（u-boot 无仓库文件：恒用飞牛基镜像自带引导件 —— 2026-10-08 实测结论见 workflow 注释）
+uboot/k1-ki-first32m.bin        K1 引导件（lyw-ki 仓 iStoreOS 构建的 U-Boot 2025.10，
+                                注入载荷区 [17408,32MiB)，fdt_fixup_memory + mmc 优先）
 build-k1-fnos.sh                镜像装配（走官方 boot.scr：part uuid 现场取分区身份，不写死 UUID）
+build-dtb.sh                    在飞牛内核树里编 DTB + SoC 一致性门禁
+build-modules.sh                按基镜像 header 现编四个树外模块（vermagic 硬闸）
+tools/r5s-media-parity.py       媒体簇 vs 官方 R5S 逐节点对标门禁（纯 Python，无 dtc 依赖）
 tools/fit-resign.py             FIT 哈希校验/重签（改写 FIT 内负载后必跑，否则 SPL 拒载）
-tools/offline-read/             离线读盘（Windows 免装驱动）：ext4 列举/提取、btrfs 列举/提取、原始磁盘对齐读
+tools/verify-repo-static.sh     仓库静态门禁（eMMC 劫持 / EEE / DTB 同步 / 媒体簇对标 / 文档可执行位）
+tools/offline-read/             离线读盘（Windows 免装驱动）：ext4 列举/提取、btrfs 列举/提取
 TROUBLESHOOTING.md              故障复盘：串口原文、取证链、根因、修复、验收判据
-verify-fnos-bootchain.sh        引导链六环验证
+docs/OTA-验收单.md              在线升级后的 P1/P2/P3 验收清单
+docs/REPO-MAP.md                **仓库导览**：每个文件一行说明 + 被谁消费 + 能不能改
+verify-fnos-bootchain.sh        引导链六环验证（含 CMA/kernelfile/OTA 自愈产物的硬断言）
+tools/tests/kf-boot-gate-test.sh 引导参数硬门禁单元测试（9 例，构建前秒级）
 ```
 
 ## 双千兆网口：取证结论与修复（2026-10）
@@ -71,7 +80,9 @@ verify-fnos-bootchain.sh        引导链六环验证
 `EXPECT_MODULES=4`、网口 DT 门禁 `tools/verify-k1-net-dts.sh`（单持有 / parents 2 组 /
 PHY 与 queue0 干净 / 无 `realtek,` / 四延迟），以及仓库静态门禁 `tools/verify-repo-static.sh`。
 用户态侧：禁用残留的 `networking.service`(ifupdown，本镜像由 NM 管网)、
-摘掉每开机 `Bad address` 的 `rga3`（有 OF 表，仍由 udev 别名加载），保证 `systemd-modules-load` 不再开机失败。
+摘掉每开机 `Bad address` 的 `rga3`（该模块**没有任何 MODULE_DEVICE_TABLE 别名**，udev 不会按
+compatible 自动加载它；改 DT 的 compatible 也不会让它加载 —— 要恢复 RGA 得先修 `rga_iommu_bind`
+的 EFAULT），保证 `systemd-modules-load` 不再开机失败。
 
 **坑⑦（2026-10-13 追加，2026-10-17 改判）——EEE 省电态**：当年按"整口 Link Down（高峰 34 次/3h、
 深夜不掉、两端 CRC=0）+ 对端 `phy_eee_wakeup_error_n=8126`"判为 EEE/LPI 唤醒时序问题，
@@ -91,20 +102,47 @@ PHY 与 queue0 干净 / 无 `realtek,` / 四延迟），以及仓库静态门禁
 K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 recovery / p5 backup / p6 rootfs），
 **不是** Linux 的 BOOT+rootfs 布局。因此：
 
-1. 本仓库产出的是**自包含的 Linux 布局镜像**，刷到 **SD 卡**，由镜像自带的 u-boot 从本介质引导 ——
-   **全程不写 eMMC**，正在运行的厂商系统不受影响。
+1. 本仓库产出的是**自包含的 Linux 布局镜像**，刷到 **SD 卡**，由镜像前导区的 U-Boot
+   （`uboot/k1-ki-first32m.bin`，来自 lyw-ki 仓的 K1 iStoreOS 构建：U-Boot 2025.10-OpenWrt
+   + `ddr-v1.23-03ea844c5d`，与本板 eMMC 原厂同版本；`boot_targets` 本就 mmc 优先）
+   从本介质引导 —— **全程不写 eMMC**，正在运行的厂商系统不受影响。
 2. 必须防守三条安卓布局侧路（`verify-fnos-bootchain.sh` 里是硬闸）：
    - u-boot 若带 `bootrkp`/`boot_android` 且先扫到 eMMC 的 `boot` 分区 → 会去启厂商安卓系统
    - 引导配置里 `root=` 若指向 `/dev/mmcblk0*` 或厂商 PARTUUID → 会挂到 eMMC 上的厂商根分区
    - BROM 冷启动若优先 eMMC → 压根不从 SD 起（厂商 env 显示 `rkimg_bootdev` 先探 SD）
-3. `idbloader.img` **内嵌板级 DDR 初始化固件**，跨板复用会 DDR 训练不匹配（实测 T68M 那份是
-   `DDR V1.18`，与本板 LPDDR4@1560MHz 不符）—— 只能用为 K1 编译的那一对。
+3. `idbloader` 内嵌板级 DDR 初始化固件，跨板复用会 DDR 训练不匹配（实测 T68M 那份是
+   `DDR V1.18`，与本板 LPDDR4@1560MHz 不符）—— 只能用为 K1 编译的那一对；装配期断言拒绝
+   V1.18 与 1056MHz 家族，要求 `v1.23`。
+
+## 媒体簇与引导参数对标官方 R5S（2026-10-27 定案）
+
+用户口径：**K1 与官方 R5S 同 SoC，媒体簇与 CMA 都与官方 R5S 方案对齐，不自创**。
+
+- 参照件 = `dist/rk3568-nanopi-r5s-official.dtb`（飞牛官方 R5S 固件里那份，
+  sha256 `95d4f336…`，与 xck-nas 仓同一份）
+- 门禁 = `tools/r5s-media-parity.py`：GPU/NPU/VPU/RGA/JPEGD/IEP/mpp-srv/IOMMU/OPP 共 26 个节点，
+  逐属性比对；phandle 引用解析成**目标节点名**再比（两板编号不同、指向相同即一致）。
+  本板有实机证据的差异写进 `dts/r5s-media-allowlist.txt`，一条一理由。
+- 本轮对齐到位的项：GPU `interrupts/interrupt-names` 顺序（gpu,mmu,job）、GPU opp 表节点名
+  `opp-table-1`、NPU opp 表补 `rockchip,init-freq=<900MHz>`、`vepu@fdee0000` 节点名、
+  `rga@fdeb0000` 的 `reg=0x180` + `clock-names=aclk/hclk/sclk`、新增 `rk_rga@fdeb0000`(rockchip,rga2)、
+  三个 IOMMU 补 `interrupt-names`（vdpu_mmu/vepu_mmu/rkvdec_mmu）。
+- 两条**故意不齐**（已登记 allowlist，附实机证据）：`vdpu@fdea0400`（与在用 legacy 解码节点寄存器
+  重叠，新增会让同一硬件被两个 mpp 客户端争用 —— 就是 10-19 转码死机那一类风险，需先上机验证）、
+  `iommu@fde4b000` 保持 disabled（本板 NPU 电源域握手失败，只能走 non-iommu 逃生门，10-15 实机验收通过）。
+- **CMA = 256M**（官方 R5S 的 `fnEnv.txt` 就是 `extraargs=cma=256M`；官方 DTB 无 reserved CMA 区，
+  cmdline 的 `cma=` 是唯一决定因素）。构建期硬断言 `extraargs` 必须含 `cma=256M`，镜像门禁再断言一次
+  并反向拒绝 1G/2G。历史 1G 只是绕开相册 AI 的 339MB 连续申请，**不再使用**。
 
 ## 引导链走官方 boot.scr（2026-10-12 改：UUID 不写死）
 
 - 官方基镜像 BOOT 分区里只有 `boot.cmd` / `boot.scr` / `fnEnv.txt` / `grub`，**没有 extlinux**；
   `boot.cmd` 每次启动 `part uuid` 现场取 bootuuid/rootuuid 再拼进 bootargs
-  → 分区身份永不写死，TF 卡与 eMMC 双介质并存也不会串盘；`kernelfile=vmlinuz` 软链跟随最新内核。
+  → 分区身份永不写死，TF 卡与 eMMC 双介质并存也不会串盘。
+- `kernelfile` 由基镜像给定（v1.1.0 = `vmlinuz-6.18.18.c1145-trim`），官方
+  `/etc/kernel/postinst.d/15-update-ukernel-ver` 每次装新内核都会改写它。装配期三道硬门禁：
+  目标**存在**、**>5MB**、内容是 **arm64 Image 或 gzip**；指向的文件不存在时自动改成本板唯一的
+  `vmlinuz-*`，一个都没有则构建失败（"fnEnv 指到不存在的内核 → 刷进去必黑无输出"是真实事故）。
 - 本仓库原先自造 `extlinux/extlinux.conf`（静态 `root=PARTUUID=` 构建期读到的值），而 u-boot 优先走
   extlinux → 身份被钉死；更麻烦的是该值继承自官方基镜像，**所有产物完全相同**（实测 TF 卡与
   KICKPI-K1_34.img 都是 `e1b4e4d7-a003-4448-ade5-273ed910c9ad`）。
@@ -128,24 +166,36 @@ K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 r
 # 1) 按基镜像 header 现编 4 个模块（maxio + SWT6621S 三件套；vermagic 硬闸）
 ./build-modules.sh <基镜像> built-modules
 
-# 2) 装配镜像（基镜像自带 u-boot 原样保留 + DTB + 模块注入 + depmod + 固件 + softdep）
+# 2) 在飞牛内核树里编 DTB（本机没有 dtc 也可以只走 CI 的「只编 DTB」工作流）
+./build-dtb.sh
+
+# 3) 装配镜像（注入本板 U-Boot 载荷 + DTB + 模块 + depmod + 固件 + softdep + OTA 自愈素材）
 BASE=path/to/fnnas-official-arm64-image_rockchip.img \
 DTB=dist/rk3568-kickpi-k1.dtb \
+UBOOT=uboot/k1-ki-first32m.bin \
 MODULES_DIR=built-modules \
 ./build-k1-fnos.sh
 
-# 4) 仓库静态门禁（eMMC 劫持路径 / 预编 .ko vermagic / 网口 DT 门禁）
+# 4) 仓库静态门禁（eMMC 劫持 / EEE 反向 / DTB 与 dts 一致 / 媒体簇对标官方 R5S / 文档可执行位）
 bash tools/verify-repo-static.sh
 
-# 5) 六环验证（含网口 DT 门禁、modules.dep/softdep/固件/EXPECT_MODULES 断言）
+# 5) 六环验证（含 CMA=256M、kernelfile 形态、OTA 自愈产物、modules.dep/softdep/固件/EXPECT_MODULES）
 EXPECT_MODULES=4 ./verify-fnos-bootchain.sh out/*.img
 
-# 6) 刷 SD 卡（用户执行；脚本拒绝 eMMC/nvme/已挂载设备）
+# 6) 刷 SD 卡（用户执行；写前先认盘：K1 的 eMMC 是 mmcblk0，TF 卡是 mmcblk1，别写反）
+lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT          # 期望：mmcblk1 ≈14.7G、无挂载点
 sudo xz -dc out/*.img.xz | sudo dd of=/dev/mmcblk1 bs=4M conv=fsync status=progress
 ```
 
 ## 已知限制（如实记录）
 
+- **CMA 固定 256M（官方 R5S 口径）**：相册 AI 的重负载（`trim.img2vec` → rknpu 单次申请
+  173MB/339MB 连续 DMA）在 256M 下必然失败（`cma: alloc failed -16`），闭源 rknpu 0.9.8 的失败
+  路径可能把内核挂死 → 靠硬件看门狗 44s 硬复位自愈。**这是官方同口径的代价，不是本仓 bug**；
+  要跑重负载相册 AI 才需要临时放大 CMA（改 `/boot/fnEnv.txt` 的 `extraargs`，重启生效）。
+- **媒体簇两处与官方 R5S 不同**（见 `dts/r5s-media-allowlist.txt`，每条例外都附实机证据）：
+  不新增 `vdpu@fdea0400`（与在用 legacy 解码节点寄存器重叠）、`iommu@fde4b000` 保持 disabled
+  （NPU 电源域握手失败 → 只能 non-iommu）。
 - **摄像头 gc5035**：飞牛 6.18 骨架没有 MIPI-CSI/rkisp 基础设施，强行导入会把 5.10 厂商 CSI 节点
   （含错乱引用）带进来，故剔除 —— 本产物下摄像头大概率无法工作。
 - **HDMI/VOP**：保留骨架（6.18）值，K1 特有板级参数未覆盖，需上机确认。
@@ -154,3 +204,5 @@ sudo xz -dc out/*.img.xz | sudo dd of=/dev/mmcblk1 bs=4M conv=fsync status=progr
   改用芯片 MAC 或随机地址；如需固定 MAC 需另寻途径。
 - 所有 .ko 均只完成**编译与静态符号校验**（vermagic 匹配、未定义符号全部命中内核符号表），
   **尚未在真机 insmod/组网实测**。
+- **本轮（2026-10-27）改动只到「CI 产物自证」层**：媒体簇对齐后的 DTB 未上机跑过硬解/转码，
+  上线前按 `docs/OTA-验收单.md` 与 README「验收判据」在实机复核。
