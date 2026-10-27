@@ -79,10 +79,14 @@ tools/tests/kf-boot-gate-test.sh 引导参数硬门禁单元测试（9 例，构
 装配期新增的对应硬门禁：`depmod -b` + `modules.dep` 断言、固件强制 15 个、`softdep` 断言、
 `EXPECT_MODULES=4`、网口 DT 门禁 `tools/verify-k1-net-dts.sh`（单持有 / parents 2 组 /
 PHY 与 queue0 干净 / 无 `realtek,` / 四延迟），以及仓库静态门禁 `tools/verify-repo-static.sh`。
-用户态侧：禁用残留的 `networking.service`(ifupdown，本镜像由 NM 管网)、
-摘掉每开机 `Bad address` 的 `rga3`（该模块**没有任何 MODULE_DEVICE_TABLE 别名**，udev 不会按
-compatible 自动加载它；改 DT 的 compatible 也不会让它加载 —— 要恢复 RGA 得先修 `rga_iommu_bind`
-的 EFAULT），保证 `systemd-modules-load` 不再开机失败。
+用户态侧：禁用残留的 `networking.service`(ifupdown，本镜像由 NM 管网)。
+**rga3 已放回开机清单（2026-10-27 实机翻案）**：旧版本摘掉它的理由是「8 次开机 `Bad address`(EFAULT)」，
+实机复核证明那是**旧 DTB** 的问题（缺 `rk_rga@fdeb0000` 节点 / `rga@fdeb0000` reg 段不对 → `rga_iommu_bind`
+失败）；DTB 对齐官方 R5S 之后（sha256 `9ab5b742…`）开机自动加载成功：
+`rga2 fdeb0000.rk_rga: probe successfully, hw_version:3.2.63318` + `rga_iommu: IOMMU binding successfully`
++ `rga: Module initialized. v1.3.4`，`/dev/rga` 出现、`systemd-modules-load` active、零 EFAULT。
+摘掉 rga3 = 整机没有 RGA 硬件加速，已被构建门禁反向钉死（必须含 rga3/rknpu/rk_vcodec）。
+（`rga3.ko` 确实没有任何 `MODULE_DEVICE_TABLE` 别名，所以必须靠 modules-load.d 显式加载。）
 
 **坑⑦（2026-10-13 追加，2026-10-17 改判）——EEE 省电态**：当年按"整口 Link Down（高峰 34 次/3h、
 深夜不掉、两端 CRC=0）+ 对端 `phy_eee_wakeup_error_n=8126`"判为 EEE/LPI 唤醒时序问题，

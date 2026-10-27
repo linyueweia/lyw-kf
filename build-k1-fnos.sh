@@ -606,7 +606,18 @@ WRAP
     #     都来自别的模块、rga 相关 0 条），所以 udev **不会**按 compatible 自动加载它；
     #     改 DTS 的 compatible 也不会让它加载。要用 RGA 必须先在实机修好 rga_iommu_bind
     #     的 EFAULT（DT 侧 rga@fdeb0000 已 okay），验证能插再把 rga3 放回本清单，别硬来。
-    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod" "trim-rk_vcodec.conf:rga3"; do
+    # ── 【2026-10-27 实机翻案：rga3 必须保留，已从上面的清单里拿掉】──────────────
+    #     翻案依据（K1 / TF 卡 / DTB sha256 9ab5b742 = 媒体簇对齐官方 R5S 之后的那版，
+    #     含 rk_rga@fdeb0000(rockchip,rga2)、rga@fdeb0000 的 reg=0x180）：
+    #       modprobe rga3           → rc=0
+    #       开机自动加载            → lsmod 有 rga3(147456)，systemd-modules-load active
+    #       dmesg                   → 'rga2 fdeb0000.rk_rga: probe successfully, irq=120, hw_version:3.2.63318'
+    #                                 'rga_iommu: IOMMU binding successfully, default mapping core[0x4]'
+    #                                 'rga: Module initialized. v1.3.4'
+    #       零失败                  → 没有任何 'binding map scheduler failed' / 'rga iommu bind failed'
+    #     结论：当初的 EFAULT 是**旧 DTB**（缺 rga2 节点 / rga reg 段不对）导致 iommu 绑不上，
+    #     不是 rga3.ko 本身的问题。DTB 修好后 rga3 必须保留 —— 摘掉 = 整机没有 RGA 硬件加速。
+    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod"; do
         f="${pair%%:*}"; m="${pair##*:}"
         p="$OSFIX/etc/modules-load.d/$f"
         if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
@@ -710,13 +721,21 @@ WRAP
     done
     [[ ! -e "$OSFIX/etc/systemd/system/multi-user.target.wants/networking.service" ]] \
         || fail "networking.service 仍在 multi-user.target.wants（开机仍会报 ifup 空配置）"
-    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod" "trim-rk_vcodec.conf:rga3"; do
+    for pair in "modules.conf:msr" "trim_md_mod.conf:md_mod"; do
         f="${pair%%:*}"; m="${pair##*:}"
         p="$OSFIX/etc/modules-load.d/$f"
         if [[ -f "$p" ]] && grep -qE "^${m}$" "$p"; then
             fail "$f 仍含本内核跑不了的模块 $m（会让 systemd-modules-load 开机失败）"
         fi
     done
+    # rga3 / rknpu / rk_vcodec 反向自证：必须【在】开机清单里（2026-10-27 翻案，见 (2) 段）
+    #   摘掉 rga3 的旧决策会让整机没有 RGA 硬件加速，这条门禁专门防它再被摘。
+    RC="$OSFIX/etc/modules-load.d/trim-rk_vcodec.conf"
+    [[ -f "$RC" ]] || fail "镜像缺 modules-load.d/trim-rk_vcodec.conf"
+    for m in rga3 rknpu rk_vcodec; do
+        grep -qx "$m" "$RC" || fail "trim-rk_vcodec.conf 缺 $m（RGA/NPU/VPU 加速不可用；rga3 的「摘掉」结论已被 DTB 修复推翻）"
+    done
+    echo "  ✓ modules-load 含 rga3 / rknpu / rk_vcodec（RGA 硬件加速不会被静默摘掉）"
     # 网口门禁：MAC/PHY 驱动必须【全部】显式列入开机清单。
     # 只放 maxio 是历史 bug —— dwmac_rk 一旦交给 udev 自动加载，实机就是开机不加载、
     # 灯全灭。这里逐个断言，缺一个即构建失败。
