@@ -10,6 +10,9 @@ FAIL=0
 EMMC_UUID="614e0000-0000-4b53-8000-1d28000054a9"
 
 echo "== 仓库静态门禁 =="
+# 日志文件用私有临时目录（固定 /tmp 名在共享环境会撞权限/并发覆盖）
+TMPD="$(mktemp -d "${TMPDIR:-/tmp}/kf-static.XXXXXX")" || { echo "✗ 建临时目录失败"; exit 1; }
+trap 'rm -rf "$TMPD"' EXIT
 # 只查会被装配/引导消费的材料，跳过 .git 与文档里的历史描述
 SCAN_DIRS=(uboot tools dts patches assets .github)
 for d in "${SCAN_DIRS[@]}"; do
@@ -51,10 +54,10 @@ fi
 
 # 网口 DT 门禁（对提交的 dist DTB）
 if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
-    if bash tools/verify-k1-net-dts.sh dist/rk3568-kickpi-k1.dtb >/tmp/_rs_net.log 2>&1; then
+    if bash tools/verify-k1-net-dts.sh dist/rk3568-kickpi-k1.dtb >"$TMPD/net.log" 2>&1; then
         echo "  ✓ 网口 DT 门禁 ALL PASS（dist DTB）"
     else
-        echo "  ✗ 网口 DT 门禁 FAIL（dist DTB）"; tail -12 /tmp/_rs_net.log | sed 's/^/     /'; FAIL=1
+        echo "  ✗ 网口 DT 门禁 FAIL（dist DTB）"; tail -12 "$TMPD/net.log" | sed 's/^/     /'; FAIL=1
     fi
 else
     echo "  ✗ dist/rk3568-kickpi-k1.dtb 缺失"; FAIL=1
@@ -62,20 +65,20 @@ fi
 
 # 媒体层 DT 门禁（2026-10-19 转码死机事故防回归；判据=官方 fnOS RK3568 设备 DTB 对照）
 if [[ -f dist/rk3568-kickpi-k1.dtb ]]; then
-    if bash tools/verify-k1-media-dts.sh dist/rk3568-kickpi-k1.dtb >/tmp/_rs_media.log 2>&1; then
+    if bash tools/verify-k1-media-dts.sh dist/rk3568-kickpi-k1.dtb >"$TMPD/media.log" 2>&1; then
         echo "  ✓ 媒体 DT 门禁 ALL PASS（dist DTB）"
     else
-        echo "  ✗ 媒体 DT 门禁 FAIL（dist DTB）"; tail -20 /tmp/_rs_media.log | sed 's/^/     /'; FAIL=1
+        echo "  ✗ 媒体 DT 门禁 FAIL（dist DTB）"; tail -20 "$TMPD/media.log" | sed 's/^/     /'; FAIL=1
     fi
 fi
 
 # 媒体簇对标官方 R5S（2026-10-27 用户口径：与官方 R5S 方案对齐，逐节点、逐属性）
 if [[ -f dist/rk3568-kickpi-k1.dtb && -f dist/rk3568-nanopi-r5s-official.dtb ]]; then
     if python3 tools/r5s-media-parity.py dist/rk3568-kickpi-k1.dtb \
-            dist/rk3568-nanopi-r5s-official.dtb >/tmp/_rs_parity.log 2>&1; then
+            dist/rk3568-nanopi-r5s-official.dtb >"$TMPD/parity.log" 2>&1; then
         echo "  ✓ 媒体簇与官方 R5S 逐节点一致（例外已登记 dts/r5s-media-allowlist.txt）"
     else
-        echo "  ✗ 媒体簇与官方 R5S 不一致"; sed 's/^/     /' /tmp/_rs_parity.log | tail -24; FAIL=1
+        echo "  ✗ 媒体簇与官方 R5S 不一致"; sed 's/^/     /' "$TMPD/parity.log" | tail -24; FAIL=1
     fi
 else
     echo "  ✗ 缺 dist/rk3568-nanopi-r5s-official.dtb（官方 R5S 参照件，媒体簇对标的前提）"; FAIL=1
@@ -125,6 +128,15 @@ if awk '/git clone/ && $0 !~ /^[[:space:]]*#/ {found=1} END{exit !found}' build-
     echo "  ✗ build-k1-fnos.sh 里有构建期 git clone（离线不可复现，源码应来自仓库）"; FAIL=1
 fi
 [[ $FAIL -eq 0 ]] && echo "  ✓ 无废弃件/无构建期联网依赖"
+
+# 禁止固定 /tmp 文件名（共享 /tmp 上会撞属主/属性 → Permission denied；并发构建还会互相覆盖）
+# 判据：脚本里出现 "/tmp/_xxx" 这类固定名（注释不算）即判红，必须改用 mktemp。
+while IFS= read -r f; do
+    if awk '/\/tmp\/_[A-Za-z0-9._]+/ && $0 !~ /^[[:space:]]*#/ {found=1} END{exit !found}' "$f"; then
+        echo "  ✗ $f 用了固定 /tmp 文件名（改 mktemp；共享 /tmp 会撞权限）"; FAIL=1
+    fi
+done < <(git ls-files '*.sh' '*.py' 2>/dev/null | grep -v '^tools/offline-read/')
+[[ $FAIL -eq 0 ]] && echo "  ✓ 无固定 /tmp 文件名"
 
 # 文档与脚本一致性：README/文档里写的 ./xxx.sh 必须存在且带可执行位
 # （本机是 Windows 提交的仓库，曾把 build-*.sh 提交成 100644 → 照文档 ./build-dtb.sh 必 Permission denied）

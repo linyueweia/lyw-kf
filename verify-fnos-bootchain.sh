@@ -31,28 +31,33 @@ KREL_FULL=""      # 完整 release，运行时从镜像推导
 echo "==== 镜像: $IMG ($(stat -c%s "$IMG" 2>/dev/null || echo '?') 字节) ===="
 [[ -f "$IMG" ]] || { echo "✗ 镜像不存在"; exit 1; }
 
+# 临时件全部放在私有临时目录（不用固定 /tmp/_fb_* 名：共享 /tmp 上会撞权限，并发验证会互相覆盖）
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/kf-verify.XXXXXX")" || { echo "✗ 建临时目录失败"; exit 1; }
+IDB="$WORK/idb.img"; UBIT="$WORK/uboot.itb"; K1DTS="$WORK/k1.dts"
+NETLOG="$WORK/net_gate.log"; RESTLOG="$WORK/restore.log"
+
 echo
 echo "── 环1：SPL / DDR 初始化固件（LBA 64）──"
-dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_fb_idb.img
-[[ "$(stat -c%s /tmp/_fb_idb.img)" -gt 100000 ]] && ok "idblock 区域可读" || bad "idblock 区域异常"
-DDR_S="$( set +o pipefail; strings /tmp/_fb_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 )"
+dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > $IDB
+[[ "$(stat -c%s $IDB)" -gt 100000 ]] && ok "idblock 区域可读" || bad "idblock 区域异常"
+DDR_S="$( set +o pipefail; strings $IDB | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 )"
 [[ -n "$DDR_S" ]] && { echo "$DDR_S" | sed 's/^/       /'; ok "DDR 固件串可识别"; } || warn "未抠出 DDR 固件串"
-( set +o pipefail; strings /tmp/_fb_idb.img | grep -q 'V1.18 f366f69a7d' ) \
+( set +o pipefail; strings $IDB | grep -q 'V1.18 f366f69a7d' ) \
     && bad "这是 T68M 的 DDR V1.18（本板需 1560MHz 版本）" \
     || ok "不是 T68M 的 V1.18 固件"
-( set +o pipefail; strings /tmp/_fb_idb.img | grep -qiE '1560|v1\.2[0-9]' ) && ok "疑似 1560MHz 变体" \
+( set +o pipefail; strings $IDB | grep -qiE '1560|v1\.2[0-9]' ) && ok "疑似 1560MHz 变体" \
     || warn "版本串未直接给出 1560MHz（本板 freq_0=0x618=1560MHz，上机实测确认）"
 
 echo
 echo "── 环2：U-Boot（LBA 16384）──"
-dd if="$IMG" bs=512 skip=16384 count=4096 status=none 2>/dev/null > /tmp/_fb_uboot.itb
-if head -c 8 /tmp/_fb_uboot.itb | grep -q 'd00dfeed' || grep -qi 'device tree' <<<"$(file -b /tmp/_fb_uboot.itb)"; then
+dd if="$IMG" bs=512 skip=16384 count=4096 status=none 2>/dev/null > $UBIT
+if head -c 8 $UBIT | grep -q 'd00dfeed' || grep -qi 'device tree' <<<"$(file -b $UBIT)"; then
     ok "u-boot.itb 为 FIT/FDT 格式"
 else
-    [[ "$(tr -d '\0' < /tmp/_fb_uboot.itb | wc -c)" -gt 1000 ]] \
+    [[ "$(tr -d '\0' < $UBIT | wc -c)" -gt 1000 ]] \
         && warn "u-boot 区非空但未识别为 FIT（上机确认）" || bad "u-boot 区为空/全零"
 fi
-strings /tmp/_fb_uboot.itb | grep -iE 'U-Boot 20[0-9]{2}\.' | head -2 | sed 's/^/       /'
+strings $UBIT | grep -iE 'U-Boot 20[0-9]{2}\.' | head -2 | sed 's/^/       /'
 
 echo
 # u-boot 内置 boot_targets 必须是 mmc 优先（usb 在前 → 插着 USB 盘就起不来）
@@ -74,7 +79,7 @@ MNT_B=/mnt/_fb_boot; MNT_R=/mnt/_fb_root
 mkdir -p "$MNT_B" "$MNT_R"
 LOOP="$(losetup -fP --show "$IMG")"
 cleanup(){ for m in "$MNT_B" "$MNT_R"; do mountpoint -q "$m" && umount "$m"; done
-           [[ -n "${LOOP:-}" ]] && losetup -d "$LOOP"; rm -rf /tmp/_fb_*; }
+           [[ -n "${LOOP:-}" ]] && losetup -d "$LOOP"; rm -rf "$WORK"; }
 trap cleanup EXIT
 sleep 1
 BP=""; RP=""
@@ -93,22 +98,22 @@ echo "  ── p1 内容（前 15 项）──"; ls "$MNT_B" | head -15 | sed 's
 DTB="$(find "$MNT_B" -name 'rk3568-kickpi-k1.dtb' | head -1)"
 if [[ -n "$DTB" ]]; then
     ok "找到本板 DTB（$(stat -c%s "$DTB") 字节）"
-    if dtc -I dtb -O dts "$DTB" > /tmp/_fb_k1.dts 2>/dev/null; then
+    if dtc -I dtb -O dts "$DTB" > $K1DTS 2>/dev/null; then
         ok "DTB 可反编译"
         for pat in "tx_delay = <0x21>" "rx_delay = <0x3c>" "tx_delay = <0x2f>" "rx_delay = <0x39>"; do
-            grep -q "$pat" /tmp/_fb_k1.dts && ok "实机逐字值 $pat" || bad "缺实机值 $pat"
+            grep -q "$pat" $K1DTS && ok "实机逐字值 $pat" || bad "缺实机值 $pat"
         done
         for n in "sata@fc000000" "sata@fc400000" "sata@fc800000"; do
-            grep -q "$n" /tmp/_fb_k1.dts && ok "含 $n" || bad "缺 $n"
+            grep -q "$n" $K1DTS && ok "含 $n" || bad "缺 $n"
         done
-        grep -qiE 'maxio|mae0621' /tmp/_fb_k1.dts && ok "PHY 为 Maxio 系" || warn "未见图 PHY 型号字样"
+        grep -qiE 'maxio|mae0621' $K1DTS && ok "PHY 为 Maxio 系" || warn "未见图 PHY 型号字样"
         # 网口 DT 门禁：复位单持有（双持有 → -EBUSY → MDIO 注册失败，板上相位A 实证）、
         # assigned-clock-parents 2 组、PHY 节点无复位、queue0 无垃圾、realtek 已清
         NETGATE="$(dirname "$(readlink -f "$0")")/tools/verify-k1-net-dts.sh"
-        if [[ -f "$NETGATE" ]] && bash "$NETGATE" "$DTB" > /tmp/_fb_net_gate.log 2>&1; then
-            ok "网口 DT 门禁 ALL PASS（$(grep -c '  OK   ' /tmp/_fb_net_gate.log) 项）"
+        if [[ -f "$NETGATE" ]] && bash "$NETGATE" "$DTB" > $NETLOG 2>&1; then
+            ok "网口 DT 门禁 ALL PASS（$(grep -c '  OK   ' $NETLOG) 项）"
         elif [[ -f "$NETGATE" ]]; then
-            bad "网口 DT 门禁 FAIL"; tail -14 /tmp/_fb_net_gate.log | sed 's/^/       /'
+            bad "网口 DT 门禁 FAIL"; tail -14 $NETLOG | sed 's/^/       /'
         else
             warn "缺少 tools/verify-k1-net-dts.sh，跳过网口 DT 门禁"
         fi
@@ -200,7 +205,7 @@ while IFS= read -r f; do
     grep -qi "$EMMC_PARTUUID" "$f" 2>/dev/null && { bad "${f#$MNT_B/} 引用厂商 eMMC PARTUUID"; HIT=1; }
 done < <(find "$MNT_B" -type f -size -1M 2>/dev/null)
 [[ $HIT -eq 0 ]] && ok "引导配置未引用 eMMC（不会劫持到厂商系统）"
-( set +o pipefail; strings /tmp/_fb_uboot.itb | grep -qiE 'bootrkp|boot_android' ) \
+( set +o pipefail; strings $UBIT | grep -qiE 'bootrkp|boot_android' ) \
     && warn "u-boot 内含安卓启动路径，需确认 boot_targets 顺序" \
     || ok "u-boot 不含 bootrkp/boot_android 劫持路径"
 umount "$MNT_B"
@@ -220,7 +225,7 @@ if [[ -n "$RP" ]]; then
         rm -rf "$EXDIR"; mkdir -p "$EXDIR"
         # -S 恢复符号链接（usr-merge 下 /lib/firmware 是链接，缺它固件计数会假红）、
         # -x 保 xattr、-m 保权限时间、-s 带快照、-o 允许重跑、-i 忽略个别错误
-        if btrfs restore -S -x -m -s -o -i "$RP" "$EXDIR" >/tmp/_fb_restore.log 2>&1; then
+        if btrfs restore -S -x -m -s -o -i "$RP" "$EXDIR" >"$RESTLOG" 2>&1; then
             ROOTVIEW="$EXDIR"; VIEWMODE="btrfs-restore(挂载被拒，只读抽取)"
         fi
     fi

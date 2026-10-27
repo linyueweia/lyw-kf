@@ -120,8 +120,11 @@ if [ -f /boot/fnEnv.txt ]; then
 			ok "fnEnv.txt: cma 归一为官方口径 256M（重启后生效）"
 		fi
 	else
-		grep -v '^extraargs=' /boot/fnEnv.txt > /tmp/_fnenv.keep
-		{ cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > /boot/fnEnv.txt
+		# 新增 extraargs：临时文件建在 /boot（同文件系统、名字唯一）。
+		# 不用固定 /tmp/_fnenv.keep —— CI run#69 就是死在共享 /tmp 上同名文件的 Permission denied。
+		FNE="$(mktemp /boot/.fnenv.XXXXXX 2>/dev/null || mktemp)"
+		{ cat /boot/fnEnv.txt; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$FNE" \
+			&& cat "$FNE" > /boot/fnEnv.txt && rm -f "$FNE"
 		ok "fnEnv.txt 新增 extraargs=cma=256M loglevel=7 ignore_loglevel（重启后生效）"
 	fi
 else

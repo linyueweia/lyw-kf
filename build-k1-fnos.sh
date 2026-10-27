@@ -62,6 +62,21 @@ KREL="${KREL:-}"
 
 fail() { echo "✗ $*" >&2; exit 1; }
 
+# ── fnEnv 改键的唯一实现（原子、无固定临时文件名）────────────────────────────
+# 教训（2026-10-27 CI run#69）：旧写法用固定 /tmp/_fnenv.keep，在共享 /tmp 上撞到
+# 「Permission denied」直接把装配打断（同名文件属主/属性不可控，并发构建还会互相覆盖）。
+# 现在临时文件建在 BOOT 分区内：同文件系统、名字唯一（mktemp），失败即硬失败。
+fnenv_set() {   # fnenv_set <key> <完整新行>
+    local key="$1" line="$2" tmp
+    [[ -f "$BOOT_MNT/fnEnv.txt" ]] || fail "fnEnv.txt 不存在（$BOOT_MNT）"
+    tmp="$(mktemp "$BOOT_MNT/.fnenv.XXXXXX")" || fail "无法在 BOOT 分区建临时文件（分区只读？）"
+    grep -v "^${key}=" "$BOOT_MNT/fnEnv.txt" > "$tmp" || true
+    printf '%s\n' "$line" >> "$tmp"
+    cat "$tmp" > "$BOOT_MNT/fnEnv.txt" || { rm -f "$tmp"; fail "写回 fnEnv.txt 失败"; }
+    rm -f "$tmp"
+    grep -q "^${key}=" "$BOOT_MNT/fnEnv.txt" || fail "fnEnv.txt 里 ${key}= 没写进去（写回异常）"
+}
+
 # ── 安全闸：禁止任何设备路径 ────────────────────────────────
 case "$BASE" in /dev/*) fail "BASE 必须是镜像文件，不允许设备节点：$BASE";; esac
 for p in "$DTB"; do
@@ -136,8 +151,10 @@ echo
 echo "==== 2) 引导件处理 ===="
 echo "  引导件已就位（注入件或基镜像原生，见上方注入日志）"
 echo "     产物 LBA64 处的 DDR 固件:"
-dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > /tmp/_k1base_idb.img
-strings /tmp/_k1base_idb.img | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /' || echo "       （无 DDR 串 —— 前导区待注入或已清零）"
+IDB_TMP="$(mktemp)"
+dd if="$IMG" bs=512 skip=64 count=800 status=none 2>/dev/null > "$IDB_TMP"
+strings "$IDB_TMP" | grep -iE 'ddr.*v1\.[0-9]+|fwver: v1\.' | head -2 | sed 's/^/       /' || echo "       （无 DDR 串 —— 前导区待注入或已清零）"
+rm -f "$IDB_TMP"
 
 echo
 echo "==== 2b) 断言 U-Boot 内置默认 env 的 boot_targets 是 mmc 优先（必要时就地改写）===="
@@ -216,8 +233,7 @@ cp -f "$DTB" "$BOOT_MNT/dtb/rockchip/$DTB_NAME"
 if [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
     echo "  ── 基镜像原有 fnEnv.txt（保留其字段）──"
     sed 's/^/     /' "$BOOT_MNT/fnEnv.txt"
-    grep -v '^fdtfile=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-    { cat /tmp/_fnenv.keep; echo "fdtfile=rockchip/$DTB_NAME"; } > "$BOOT_MNT/fnEnv.txt"
+    fnenv_set fdtfile "fdtfile=rockchip/$DTB_NAME"
 else
     cat > "$BOOT_MNT/fnEnv.txt" <<EOF
 verbosity=1
@@ -242,12 +258,7 @@ fi
 # extraargs=cma=256M，官方 DTB 里也没有 reserved-memory CMA 区 —— cmdline 的 cma= 是
 # 唯一决定因素。历史 1G 只是绕开相册 AI 的 339MB 连续申请，不是官方形态，不要放大回去。
 K1_EXTRAARGS="cma=256M loglevel=7 ignore_loglevel"
-if grep -q '^extraargs=' "$BOOT_MNT/fnEnv.txt"; then
-    grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-    { cat /tmp/_fnenv.keep; echo "extraargs=$K1_EXTRAARGS"; } > "$BOOT_MNT/fnEnv.txt"
-else
-    echo "extraargs=$K1_EXTRAARGS" >> "$BOOT_MNT/fnEnv.txt"
-fi
+fnenv_set extraargs "extraargs=$K1_EXTRAARGS"
 
 # ── 硬门禁 1：kernelfile 必须指向真实存在、且确是 arm64 内核的文件 ─────────────
 # 这是"刷进去必黑"的真实事故类（xck-nas 2026-10-27：fnEnv 被整份覆盖成旧内核名 →
@@ -270,8 +281,7 @@ fi
 if [[ ! -e "$BOOT_MNT/$KF_NAME" ]]; then
     ALT="$(cd "$BOOT_MNT" && ls -1 vmlinuz-* 2>/dev/null | head -1 || true)"
     [[ -n "$ALT" ]] || fail "fnEnv 的 kernelfile=$KF_NAME 不存在，且 BOOT 分区没有 vmlinuz-* 可替换 → 刷进去必黑"
-    grep -v '^kernelfile=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-    { cat /tmp/_fnenv.keep; echo "kernelfile=$ALT"; } > "$BOOT_MNT/fnEnv.txt"
+    fnenv_set kernelfile "kernelfile=$ALT"
     echo "  ⚠ fnEnv 的 kernelfile=$KF_NAME 不存在，已自动改为 $ALT（基镜像换版后未同步）"
     KF_NAME="$ALT"
 fi
@@ -632,8 +642,7 @@ WRAP
         mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
         if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
             if ! grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt"; then
-                grep -v '^extraargs=' "$BOOT_MNT/fnEnv.txt" > /tmp/_fnenv.keep
-                { cat /tmp/_fnenv.keep; echo "extraargs=cma=256M loglevel=7 ignore_loglevel"; } > "$BOOT_MNT/fnEnv.txt"
+                fnenv_set extraargs "extraargs=cma=256M loglevel=7 ignore_loglevel"
                 echo "  ✓ fnEnv extraargs 已含 loglevel=7 ignore_loglevel"
             fi
             sync

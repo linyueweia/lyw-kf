@@ -16,6 +16,9 @@ BEGIN='# ── 硬门禁 1'
 END='# 历史构建残留/回退用的 extlinux.conf'
 SNIP="$(awk -v b="$BEGIN" -v e="$END" 'index($0,b){f=1} f&&index($0,e){exit} f{print}' "$SRC")"
 [[ -n "$SNIP" ]] || { echo "✗ 从 $SRC 抽不到门禁片段（$BEGIN … $END），脚本结构变了？"; exit 1; }
+# 门禁里的"kernelfile 悬空自动纠正"会调 fnenv_set()，一起抽出来（保证测的是真实实现）
+HELPER="$(awk '/^fnenv_set\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$SRC")"
+[[ -n "$HELPER" ]] || { echo "✗ 从 $SRC 抽不到 fnenv_set()（脚本结构变了？）"; exit 1; }
 
 mkdir -p "$ROOT" || { echo "✗ 建不了临时目录 $ROOT"; exit 1; }
 trap 'rm -rf "$ROOT"' EXIT
@@ -26,7 +29,7 @@ run_case() {   # <名字> <期望 ok|fail> <准备函数>
     rm -rf "$MNT"; mkdir -p "$MNT"
     ( $setup "$MNT" ) || { echo "  ✗ $name 前置失败"; return 1; }
     local rc=0 out
-    out="$( BOOT_MNT="$MNT"; fail(){ echo "FAILMSG:$*"; exit 9; }; eval "$SNIP" )" || rc=$?
+    out="$( BOOT_MNT="$MNT"; fail(){ echo "FAILMSG:$*"; exit 9; }; eval "$HELPER"; eval "$SNIP" )" || rc=$?
     local got="ok"; [[ $rc -ne 0 ]] && got="fail"
     if [[ "$got" == "$want" ]]; then
         echo "  ✓ $name → $got"

@@ -119,8 +119,16 @@ def main() -> int:
             if scan(f, NEEDLE_NEW):
                 print("  ✅ 已是新值（mmc 优先），无需改动")
                 return 0
-        print("  ❌ 未找到目标串 —— 该目标不是预期的那颗 U-Boot，中止")
-        return 1
+            # 现役引导件（lyw-ki 仓构建的 U-Boot 2025.10）内置就是 mmc 优先，
+            # 但它的 boot_targets 串更长、与本工具的 NEW 常量不同 —— 不能因此判 ❌。
+            # 这里只做"是否 mmc 优先"的粗判，硬判据在六环验证（断言 boot_targets=mmc1 mmc0）。
+            if scan(f, b"boot_targets=mmc"):
+                print("  ⓘ 该 U-Boot 的 boot_targets 已是 mmc 优先（非本工具的目标串）→ 不改写；"
+                      "由六环验证断言 boot_targets=mmc1 mmc0 兜底")
+                return 0
+        print("  ⓘ 未找到任何 boot_targets 串（前导区可能为空/非本工具预期的 U-Boot）—— 不改写；"
+              "由六环验证断言兜底")
+        return 0
     if len(hits) > 1:
         print(f"  ❌ 命中 {len(hits)} 处（要求恰好 1 处）—— 为安全中止")
         return 1
