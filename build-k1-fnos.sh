@@ -257,7 +257,7 @@ fi
 # CMA 与官方 R5S 对齐 = **256M**（2026-10-27 定案）：官方 R5S 的 fnEnv.txt 就是
 # extraargs=cma=256M，官方 DTB 里也没有 reserved-memory CMA 区 —— cmdline 的 cma= 是
 # 唯一决定因素。历史 1G 只是绕开相册 AI 的 339MB 连续申请，不是官方形态，不要放大回去。
-K1_EXTRAARGS="cma=256M loglevel=7 ignore_loglevel"
+K1_EXTRAARGS="cma=256M"
 fnenv_set extraargs "extraargs=$K1_EXTRAARGS"
 
 # ── 硬门禁 1：kernelfile 必须指向真实存在、且确是 arm64 内核的文件 ─────────────
@@ -302,10 +302,13 @@ PY
 [[ "$KF_KIND" != "unknown" ]] || fail "kernelfile=$KF_NAME 既不是 arm64 Image 也不是 gzip → 不是内核（刷进去必黑）"
 echo "  ✓ kernelfile=$KF_NAME（$KF_KIND，$KF_SIZE 字节）"
 
-# ── 硬门禁 2：extraargs 的 CMA 必须与官方 R5S 口径一致（256M），禁止漂移 ────────
-grep -q '^extraargs=.*cma=256M' "$BOOT_MNT/fnEnv.txt" \
-    || fail "fnEnv extraargs 的 cma 不是 256M（官方 R5S 口径）：$(grep '^extraargs=' "$BOOT_MNT/fnEnv.txt")"
-echo "  ✓ extraargs 的 cma=256M（与官方 R5S 对齐）"
+# ── 硬门禁 2：extraargs 的 CMA 必须与官方 R5S 口径一致（256M），且**不得夹带调试参数** ──
+# 旧写法只 grep '.*cma=256M'，于是 "cma=256M loglevel=7 ignore_loglevel" 也算通过 ——
+# 实机取证过：设备 fnEnv 正是这串，开机全程刷屏。现在改成整行精确匹配。
+EX_LINE="$(grep '^extraargs=' "$BOOT_MNT/fnEnv.txt" | head -1 || true)"
+[[ "$EX_LINE" == "extraargs=cma=256M" ]] \
+    || fail "fnEnv extraargs 必须是 'extraargs=cma=256M'（不得含 loglevel/ignore_loglevel 等调试参数，官方 R5S 口径）：$EX_LINE"
+echo "  ✓ extraargs = extraargs=cma=256M（与官方 R5S 对齐、无调试参数）"
 # 历史构建残留/回退用的 extlinux.conf：改名即不参与引导（u-boot 只认该文件名）
 if [[ -f "$BOOT_MNT/extlinux/extlinux.conf" ]]; then
     mv -f "$BOOT_MNT/extlinux/extlinux.conf" "$BOOT_MNT/extlinux/extlinux.conf.k1-off"
@@ -655,13 +658,18 @@ WRAP
     ln -sf /dev/null "$OSFIX/etc/systemd/system/networking.service"
     echo "  ✓ mask networking.service（ifupdown 残留；NM 才是本网的管理者）"
 
-    # (4) 内核日志级别开到最详细：写进官方 fnEnv.txt 的 extraargs（boot.scr 会拼进 bootargs）
+    # (4) 内核日志级别：产品口径 **不得带 loglevel=7 / ignore_loglevel**（2026-10-27 改判）
+    #     历史：本段曾无条件把 "cma=256M loglevel=7 ignore_loglevel" 写进 fnEnv 的 extraargs，
+    #     是调试期抓串口日志用的。代价：boot.scr 拼出的 loglevel=${verbosity} 被 ignore_loglevel
+    #     顶掉 → 开机全程刷屏、并压低吞吐；而且它会随镜像一起发布（实机取证：设备 fnEnv 正是这串）。
+    #     现在改成反向：发现调试参数就剥掉，只保留官方 R5S 口径的 cma=256M。
     if [[ -n "${BOOT_PART:-}" ]]; then
         mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
         if mountpoint -q "$BOOT_MNT" && [[ -f "$BOOT_MNT/fnEnv.txt" ]]; then
-            if ! grep -q '^extraargs=.*ignore_loglevel' "$BOOT_MNT/fnEnv.txt"; then
-                fnenv_set extraargs "extraargs=cma=256M loglevel=7 ignore_loglevel"
-                echo "  ✓ fnEnv extraargs 已含 loglevel=7 ignore_loglevel"
+            cur_ex="$(grep '^extraargs=' "$BOOT_MNT/fnEnv.txt" | head -1 || true)"
+            if [[ "$cur_ex" == *loglevel* ]]; then
+                fnenv_set extraargs "extraargs=cma=256M"
+                echo "  ✓ fnEnv extraargs 已剥掉调试参数 → extraargs=cma=256M"
             fi
             sync
             umount_safe "$BOOT_MNT"

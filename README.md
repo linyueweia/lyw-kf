@@ -204,6 +204,17 @@ sudo xz -dc out/*.img.xz | sudo dd of=/dev/mmcblk1 bs=4M conv=fsync status=progr
 - **媒体簇与官方 R5S 只剩一处不同**（见 `dts/r5s-media-allowlist.txt`，附实机证据）：
   不新增 `vdpu@fdea0400`（与在用 legacy 解码节点寄存器重叠）。`iommu@fde4b000` 已于 2026-10-27
   改回官方 `okay`（iommu 模式，NPU 走 scatter-gather）。
+- **`mpp_rkvenc: failed to init opp info` / `failed to add venc devfreq: -2` 不是缺陷**（2026-10-27 取证）：
+  官方 R5S DTB 的 `rkvenc@fdf40000` 与本仓逐属性一致（21 项，**两边都不引用 `operating-points-v2`**，
+  但两边都定义了 `rkvenc-opp-table` 节点），所以官方设备开机同样打这三行 —— 这是驱动的正常降级
+  （venc 靠 `assigned-clock-rates` 锁频，实机 `clk_rkvenc_core = 250MHz`），编码功能完全正常
+  （720p HEVC 实测 rkvenc 中断 0→90、产物 715,555 B）。**不要为了消掉这三行去挂
+  `operating-points-v2`** —— 2026-10-19 的事故就是挂 OPP 把核压到 240/250MHz，
+  导致 mpp-srv 共享复位机制风暴、整机挂死。
+- **`/boot/fnEnv.txt` 的 `extraargs` 只能有 `cma=256M`**：历史上它带过
+  `loglevel=7 ignore_loglevel`（调试期抓串口日志用），会让 `boot.scr` 拼出的
+  `loglevel=${verbosity}` 被顶掉、开机全程刷屏并压低吞吐。构建期已改为整行精确匹配门禁，
+  发现调试参数就剥掉。
 - **摄像头 gc5035**：飞牛 6.18 骨架没有 MIPI-CSI/rkisp 基础设施，强行导入会把 5.10 厂商 CSI 节点
   （含错乱引用）带进来，故剔除 —— 本产物下摄像头大概率无法工作。
 - **HDMI/VOP**：保留骨架（6.18）值，K1 特有板级参数未覆盖，需上机确认。
