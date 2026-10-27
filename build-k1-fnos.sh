@@ -629,14 +629,21 @@ WRAP
 
     # (3) 本板无对应硬件的服务一律 mask（与日志里那几条 FAILED 一一对应）
     #     pwm-fancontrol = 本板风扇是 GPIO 控制；nut-* = 无 UPS；smartmontools = 无磁盘；exim4 = 未配置
+    #     ⚠ 2026-10-27 补漏：exim4 是 **SysV 脚本**（只有 /etc/init.d/exim4，没有 .service 文件），
+    #     旧写法只查 systemd unit 文件 → 分支从不触发 → 每次开机 exim4.service(LBS, generated)
+    #     照样启动并 failed（K1 TF 实机：'either install a certificate or change
+    #     tls_advertise_hosts option' → exit 1）。现在把 init.d 存在也算命中。
     for u in pwm-fancontrol nut-monitor nut-server smartmontools exim4; do
-        for d in "$OSFIX/etc/systemd/system" "$OSFIX/usr/lib/systemd/system"; do
-            if [[ -f "$d/$u.service" && ! -L "$d/$u.service" ]]; then
-                ln -sf /dev/null "$OSFIX/etc/systemd/system/$u.service"
-                echo "  ✓ mask $u.service"
-                break
-            fi
+        hit=0
+        for d in "$OSFIX/etc/systemd/system" "$OSFIX/usr/lib/systemd/system" "$OSFIX/lib/systemd/system"; do
+            [[ -f "$d/$u.service" && ! -L "$d/$u.service" ]] && hit=1
         done
+        # SysV 脚本（systemd-sysv-generator 会为它生成 $u.service，mask 同名 unit 即可拦住）
+        [[ -f "$OSFIX/etc/init.d/$u" ]] && hit=1
+        if [[ "$hit" = 1 ]]; then
+            ln -sf /dev/null "$OSFIX/etc/systemd/system/$u.service"
+            echo "  ✓ mask $u.service"
+        fi
     done
 
     # (3b) ifupdown 是残留：本镜像由 NetworkManager + fnOS 自己的 network_service 管网，
@@ -712,10 +719,13 @@ WRAP
     # mask 自证：单元【存在于镜像里】才要求已 mask（exim4 等在本基镜像中根本不存在，
     # 一刀切断言会把好构建判死；“存在却没 mask” 才是真问题）
     for u in pwm-fancontrol nut-monitor nut-server smartmontools exim4 networking; do
-        if [[ -e "$OSFIX/etc/systemd/system/$u.service" || -e "$OSFIX/usr/lib/systemd/system/$u.service" ]]; then
+        # SysV 脚本也算「存在于镜像」——它会被 systemd-sysv-generator 生成 $u.service
+        # （exim4 就是这种：只有 /etc/init.d/exim4，旧自证只查 .service 文件 → 假绿）
+        if [[ -e "$OSFIX/etc/systemd/system/$u.service" || -e "$OSFIX/usr/lib/systemd/system/$u.service" \
+              || -e "$OSFIX/lib/systemd/system/$u.service" || -f "$OSFIX/etc/init.d/$u" ]]; then
             if ! { [[ -L "$OSFIX/etc/systemd/system/$u.service" ]] \
                     && [[ "$(readlink "$OSFIX/etc/systemd/system/$u.service")" == "/dev/null" ]]; }; then
-                fail "$u.service 存在于镜像但未真正 masked（自证要求 /etc 下指向 /dev/null 的软链）"
+                fail "$u 存在于镜像（systemd unit 或 /etc/init.d 脚本）但未真正 masked（自证要求 /etc 下指向 /dev/null 的软链）"
             fi
         fi
     done
