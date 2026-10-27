@@ -813,6 +813,17 @@ umount_safe "$BOOT_MNT"
 losetup -d "$LOOP2"
 
 echo
+echo "==== 5b) GPT 自洽（保护MBR / 主头 / 分区项 / 备份头，全字段 + CRC）===="
+# 为什么这道门禁必须有（2026-10-27 两次实机事故）：
+#   镜像刷进**比镜像大**的卡/盘时，主头里的 alternate_lba / last_usable 仍指向镜像末尾
+#   （例：3.86G 镜像 → 7,538,687，而卡是 14.7G → 30,883,839）。
+#   U-Boot 宽容：照样从 mmc 1:1 读 boot.scr → 引导看似正常；
+#   Linux 内核严格：alternate 不在设备末尾 ⇒ 拒绝整张分区表 ⇒ `mmcblk1:` 后**不列 p1 p2**
+#   ⇒ 卡死 `Waiting for root device PARTUUID=...`（无 panic、无报错，干等）。
+#   构建期这里断言【镜像自身自洽】；写卡后再对【目标盘】跑一次（见下方刷写提示）。
+python3 tools/gpt-fix.py "$IMG" --apply || { echo "❌ GPT 修复/复检失败（alternate_lba / 项CRC / 备份头 / 保护MBR）"; exit 1; }
+
+echo
 echo "==== 6) 压缩与摘要 ===="
     # 可跳过压缩：本地快速验证（SKIP_XZ=1）或内存吃紧时用
     if [[ "${SKIP_XZ:-0}" == "1" ]]; then
@@ -837,3 +848,10 @@ echo "   dd if=$(basename "$IMG") of=/dev/sdX bs=4M conv=fsync status=progress"
 else
 echo "   xz -dc $(basename "$IMG").xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress"
 fi
+echo
+echo "⚠ 刷完【必须】对目标盘再跑一次 GPT 适配（镜像比盘小 → 主头 alt/last_usable 指错，"
+echo "  U-Boot 能过但内核拒表 → 卡死 Waiting for root device，2026-10-27 实机两次）："
+echo "   python3 tools/gpt-fix.py /dev/sdX --apply --renew-partuuid=2"
+echo "     --renew-partuuid=2 换掉 rootfs 的 PARTUUID，避免与板上 eMMC 上同源系统撞车"
+echo "     （boot.cmd 是 part uuid 现场取值，换 GUID 不用改任何引导文件）"
+echo "   判据：fdisk -l /dev/sdX 能看到 p1/p2，且 gpt-fix 诊断输出「GPT 全字段自洽」"
