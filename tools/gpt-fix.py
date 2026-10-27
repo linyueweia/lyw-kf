@@ -50,7 +50,17 @@ def scan(f, last, off_mbr=0):
     ecrc = struct.unpack_from("<I", prim, 88)[0]
     f.seek(off_mbr + ent_lba*512); entries = f.read(num*esz)
     real = crc32(entries)
-    if real != ecrc: probs.append(f"分区项CRC坏(声明0x{ecrc:08x} 实算0x{real:08x})")
+    if real != ecrc and ent_lba != 2:
+        # 实测：烧录工具会把 entries_lba 改坏（K1 那次 = 2016 = 2048-32，指向未写入区 0xFF），
+        # 而 UEFI 规范的主项数组固定在 LBA2。先回落到 LBA2 再判，别把垃圾当分区项修回去。
+        f.seek(off_mbr + 2*512); cand = f.read(num*esz)
+        if crc32(cand) == ecrc:
+            probs.append(f"主头 entries_lba={ent_lba}≠2（烧录工具改坏），LBA2 处项数组 CRC 与声明一致，按 LBA2 修")
+            entries, real = cand, ecrc
+        else:
+            probs.append(f"分区项CRC坏(声明0x{ecrc:08x} 实算0x{real:08x})")
+    elif real != ecrc:
+        probs.append(f"分区项CRC坏(声明0x{ecrc:08x} 实算0x{real:08x})")
     # 备份侧
     f.seek(off_mbr + last*512); bak = f.read(512)
     if bak[:8] != b"EFI PART":
