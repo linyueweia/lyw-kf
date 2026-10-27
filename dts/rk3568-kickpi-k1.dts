@@ -6452,21 +6452,26 @@
 	clocks = <&{/clock-controller@fdd20000} 0x28 &{/clock-controller@fdd20000} 0x29>;
 	#iommu-cells = <0x00>;
 	compatible = "rockchip,rk3568-iommu", "rockchip,iommu-v2";
-	/* ★2026-10-12 NPU 彻查结论（三层根因之一，实测修复）：
-	   okay 时的故障链：本 iommu 的 power-domains=npu 域 → 飞牛 6.18 的
-	   rockchip-pm-domain 在冷启动给 npu 域 pwrup 时 idle 握手过不去
-	   （"failed to get ack on domain 'npu', val=0x1ee"，54s/127s 稳定复现）
-	   → 本 IOMMU 控制器 probe 被挡、/sys/class/iommu 里不出现
-	   → npu 设备进不了任何 iommu group → rknpu_probe 里
-	   `iommu_group_get(dev)==NULL → return -EINVAL(-22)` → 无 NPU。
-	   注：官方 Debian/Ubuntu/Android 的 DTB 与我们逐项一致（同样 okay），
-	   差异在飞牛内核的 pm_domain 握手实现，DT 侧无法根治；
-	   rknpu_is_iommu_enable() 对本节点 disabled 会自动切
-	   "non-iommu mode"（专用逃生门）→ probe 通过、推理实测可用。
-	   实测：冷启动零干预 root 跑 img2vec 模型 → 域自动 pwrup、
-	   NPU 中断 0→25、输出 (1,768) 向量，全程无新增 ack 错误。
-	   若未来飞牛内核修好 pwrup 握手，可把这里改回 "okay" 恢复 IOMMU 模式。 */
-	status = "disabled";
+	/* ★2026-10-27 实机翻案（推翻 2026-10-12 的「只能 non-iommu」结论）
+	   旧结论：本 iommu 的 power-domains=npu 域 → 飞牛 6.18 的 rockchip-pm-domain
+	   冷启动给 npu 域 pwrup 时握手过不去（failed to get ack on domain 'npu',
+	   val=0x1ee）→ 本控制器 probe 被挡 → npu 进不了 iommu group →
+	   rknpu_probe 里 iommu_group_get()==NULL → -EINVAL → 只能走 non-iommu 逃生门。
+	   翻案依据（新内核 6.18.18.c1145-trim + 本 DTB，K1 实机 2026-10-27）：
+	     把本节点改回 okay 后冷启动实测 →
+	       /sys/class/iommu/fde4b000.iommu 存在（driver=rk_iommu），iommu_group/8 在
+	       dmesg：RKNPU fde40000.npu: rknpu iommu is enabled, using iommu mode
+	       NPU 中断 0→1428；trim.txt2vec 推理正常；cma alloc failed 0 / failed to allocate 0
+	   关键理解：冷启动仍会打一次 ack 超时（开机的第 9.1s），但 genpd 的
+	   "Timed out. Forcing sync_state()"（10s 后）接手，iommu 在 22s 正常 probe，
+	   rknpu 走 iommu 模式 —— 即「首次 pwrup 失败」并不阻止 iommu 最终可用。
+	   iommu 模式的收益是决定性的：rknpu GEM 走 scatter-gather 吃系统内存，
+	   不再受 CMA 尺寸约束。non-iommu 模式下 fnOS 的 trim.face_det 每次要
+	   339MiB 连续 CMA（cma=256M 装不下），每 90 秒刷一次
+	   "failed to allocate 355860480 buffer"，人脸识别完全不可用。
+	   回退开关：改回 "disabled" 即回到 non-iommu 逃生门（小模型仍可用，
+	   但 >256MiB 的模型必失败）。 */
+	status = "okay";
 	interrupt-names = "rknpu_mmu";
 	reg = <0x00 0xfde4b000 0x00 0x40>;
 	};

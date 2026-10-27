@@ -12,7 +12,7 @@
 | 3 | TF 卡与 eMMC 同镜像并存可能串盘 | 仓库自造 `extlinux.conf` 静态写死 `root=PARTUUID=`，值继承自基镜像、所有产物相同 | 改回飞牛官方 boot.scr 链路（`part uuid` 现场取） | `boot.cmd` 含 `part uuid`、镜像内**不存在** `extlinux/extlinux.conf` |
 | 4 | Windows 看不见移动硬盘里的资料 | 硬盘是 ext4，Windows 无 ext4 驱动（硬件没坏） | 用仓库 `tools/offline-read/` 直读（管理员权限，免装驱动） | 能列出根目录并拷出文件 |
 | 5 | WiFi：`mmc_host mmc2` 不注册、扫卡失败、无 wlan0 | ①`sdio-pwrseq` 缺 `reset-gpios` ②飞牛无原厂 wlan-platdata 驱动（没人拉 `WIFI,poweren_gpio`）③pinctrl config `0x129` 指向 i2s（phandle 错乱）；另有固件未装进 `seekwave/` 子目录 | pwrseq `reset-gpios = gpio3 PD5 + ACTIVE_LOW` 代劳上电 + delay 1000ms + config 换 `0xc1` + 固件双路径注入 | **✅ 实测**：`mmc2: new UHS-I SDR104 SDIO card` → `boot sucessfull` → wlan0 → nmcli 扫 7 个 AP（信号100/405M） |
-| 6 | NPU（灵魂配置）：`probe failed -22`、无 NPU 设备 | 三层：①飞牛 pm_domain 冷启动 pwrup idle 握手失败（ack 0x1ee）挡 `iommu@fde4b000` probe ②NPU 无 iommu group → `rknpu_probe` 源码 1331 行 `iommu_group_get==NULL → -EINVAL` ③DRM 模式无 `/dev/rknpu` + 推理需 root | `iommu@fde4b000 status=disabled` 走 rknpu **non-iommu 逃生门** + `interrupt-names=npu_irq`；推理用 root | **✅ 实测**：冷启动零干预 root 推理 → `init_runtime:0` → 输出 `(1,768)` → 中断 `0→25` → 域自动 pwrup on/active（见 §2.3） |
+| 6 | NPU（灵魂配置）：`probe failed -22`、无 NPU 设备 | 三层：①飞牛 pm_domain 冷启动 pwrup idle 握手失败（ack 0x1ee）挡 `iommu@fde4b000` probe ②NPU 无 iommu group → `rknpu_probe` 源码 1331 行 `iommu_group_get==NULL → -EINVAL` ③DRM 模式无 `/dev/rknpu` + 推理需 root | **2026-10-27 翻案**：`iommu@fde4b000 status="okay"`（跟随官方）→ genpd `Forcing sync_state()` 后 iommu 正常 probe、rknpu 走 iommu 模式（GEM 走 scatter-gather，不再受 CMA 256M 限制）；non-iommu 逃生门降级为回退开关；推理用 root | **✅ 实测**：`/sys/class/iommu/fde4b000.iommu` 在、`iommu_group/8`、dmesg `rknpu iommu is enabled, using iommu mode`、NPU 中断 0→1428、`cma alloc failed 0`（见 §2.3） |
 
 ---
 
@@ -250,7 +250,20 @@ nmcli device wifi list → 7 个 AP（TikTok-专用/OpenWrt_5G 信号 100、405 
 
 ---
 
-## 2.3 NPU（灵魂配置）：三层根因与 non-iommu 绕过（2026-10-12 实测修复）
+## 2.3 NPU（灵魂配置）：iommu 模式（2026-10-27 翻案，取代 10-12 的 non-iommu 绕过）
+
+> **结论先行（2026-10-27，K1 新内核 6.18.18.c1145-trim + DTB 9ab5b742 实机）**：
+> 把 `iommu@fde4b000` 改回官方默认的 `okay` 即可恢复 iommu 模式 —— 本节下方 10-12 的
+> non-iommu 分析保留作历史与回退依据，但**不再是当前方案**。
+> 实测判据：`/sys/class/iommu/fde4b000.iommu`（driver=rk_iommu）、`iommu_group/8`、
+> dmesg `RKNPU fde40000.npu: rknpu iommu is enabled, using iommu mode`、
+> NPU 中断 0→1428、`trim.txt2vec` 推理正常、**cma alloc failed 0 / failed to allocate 0**。
+> 关键认知：冷启动**第一次** pwrup 仍会 `failed to get ack on domain 'npu', val=0x1ee`（第 9.1s），
+> 但 genpd 的 `Timed out. Forcing sync_state()`（+10s）接手后 iommu 于第 22s 正常 probe
+> —— **首次 pwrup 失败并不阻止 iommu 最终可用**，这是 10-12 当时判断错的地方。
+> 收益：iommu 模式 rknpu GEM 走 scatter-gather 吃系统内存，
+> fnOS `trim.face_det` 的 339MiB 单次申请不再撞 CMA 256M 墙（non-iommu 下必失败）。
+> 回退开关：`status` 改回 `"disabled"` 即回到 non-iommu 逃生门（小模型可用、>256MiB 必失败）。
 
 ### 现象
 

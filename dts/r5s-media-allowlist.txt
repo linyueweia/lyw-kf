@@ -16,13 +16,16 @@
 # rkvdec 中断正常增长、无 mpp_task_timeout）再解除本条。
 missing vdpu@fdea0400
 
-# ── 2. NPU 的 iommu@fde4b000 保持 disabled（官方是 okay）────────────────────
-# 本板 NPU 域握手失败有实测证据：pm_domain 等不到 npu 域 ACK（failed to get ack on
-# domain 'npu'）→ iommu probe 被挡 → rknpu iommu_group_get() 返回 NULL → -EINVAL，
-# NPU 完全不可用。本板走驱动自带的 non-iommu 逃生门（iommu disabled + interrupt-names
-# = "npu_irq"），2026-10-15 实机验收通过（img2vec_medium.rk3568.rknn OK，npu 中断
-# 0→25）。打开 iommu 需先解决本板电源域握手，属内核问题，不是 DT 能对齐的。
-diff /iommu@fde4b000 status
+# ── 2. ~~NPU 的 iommu@fde4b000 保持 disabled~~ 【2026-10-27 已撤销：改回 okay】
+# 旧结论（2026-10-12）：pm_domain 等不到 npu 域 ACK → iommu probe 被挡 → rknpu -EINVAL，
+#   于是走 non-iommu 逃生门（img2vec 小模型可通过）。
+# 翻案（2026-10-27，新内核 6.18.18.c1145-trim + 本 DTB 实机）：
+#   改回 okay 后 iommu 正常 probe（/sys/class/iommu/fde4b000.iommu、iommu_group/8），
+#   dmesg「rknpu iommu is enabled, using iommu mode」，NPU 中断 0→1428，零分配失败。
+#   冷启动仍会打一次 ack 超时，但 genpd Forcing sync_state() 后 iommu 正常起来。
+#   决定性收益：iommu 模式 GEM 走 scatter-gather 吃系统内存，不再受 CMA 256M 限制
+#   （non-iommu 下 trim.face_det 要 339MiB 连续 CMA，必失败）。
+#   因此本节点**不再允许与官方存在 status 差异**，下面这条 allowlist 条目已删除。
 
 # ── 3. GPU OPP 表多两个分档变体（官方表没有）────────────────────────────────
 # 本板 dump 自带的 opp-j-600000000 / opp-m-800000000 是同一 SoC 的速度分档变体，

@@ -45,6 +45,15 @@ ck "双串 iommu 节点数" "$(grep -c 'rk3568-iommu.*rockchip,iommu-v2' "$TMP/d
 ck "单串 rk3568-iommu 数（仅 fe043e00，官方同款）" "$(grep -c 'compatible = "rockchip,rk3568-iommu"' "$TMP/d.dts" || true)" "1"
 ck "孤串 iommu-v2 数（内核不认，必须 0）" "$(grep -c 'compatible = "rockchip,iommu-v2"' "$TMP/d.dts" || true)" "0"
 
+echo "-- NPU iommu@fde4b000：必须 okay（iommu 模式，2026-10-27 翻案）"
+# 为什么这条是硬门禁：non-iommu 逃生门下 rknpu GEM 必须物理连续 → 只能吃 CMA，
+# fnOS trim.face_det 单次要 339MiB 连续块（cma=256M 必失败，每 90 秒刷 alloc failed），
+# 相册人脸识别完全不可用。iommu 模式走 scatter-gather 吃系统内存，不受 CMA 约束。
+if node_block 'iommu@fde4b000 \{' "$TMP/npu_iommu"; then
+  has   "$TMP/npu_iommu" "status=okay（iommu 模式，跟随官方 R5S）"  'status = "okay"'
+  hasnt "$TMP/npu_iommu" "status=disabled（non-iommu 逃生门，不得作为当前方案）" 'status = "disabled"'
+fi
+
 echo "-- rkvdec@fdf80200：官方锁频形态（396/396/396/600 + disable-auto-freq，不挂 OPP）"
 if node_block 'rkvdec@fdf80200 \{' "$TMP/rkvdec"; then
   has "$TMP/rkvdec" "disable-auto-freq 在位"        'rockchip,disable-auto-freq'

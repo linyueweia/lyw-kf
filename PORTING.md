@@ -55,7 +55,7 @@
 | 4 | 网口 PHY 绑不上（Generic PHY / phy_id 全 1） | 见 §3 五层坑 | 见 §3 | `tools/verify-k1-net-dts.sh` + softdep + 占位 PHY |
 | 5 | WiFi 扫不到卡 | sdio-pwrseq 缺 reset-gpios / 极性错 / pinctrl 0x129 指错节点 | PD5+ACTIVE_LOW+1000ms 等 R1–R5 实测定论 | dts 源 + CI |
 | 6 | WiFi 固件 -22 / calib -2 | 驱动请求 `seekwave/` 子目录，构建只装根目录 | 双路径注入各 15 文件断言 | `build-k1-fnos.sh` |
-| 7 | NPU `probe failed -22` | iommu_group_get()==NULL（pm_domain 冷启动握手失败挡 iommu probe） | `iommu@fde4b000 status=disabled` 走 non-iommu 逃生门 + `interrupt-names="npu_irq"` | dts 源 + 实测推理通过 |
+| 7 | NPU `probe failed -22` | iommu_group_get()==NULL（pm_domain 冷启动首次 pwrup 握手失败，早期挡住 iommu probe） | **2026-10-27 翻案**：`iommu@fde4b000 status="okay"`（跟随官方）；genpd `Forcing sync_state()` 后 iommu 正常 probe → rknpu 走 iommu 模式。non-iommu 逃生门仅作回退开关 | dts 源 + 实机（iommu_group/8 + NPU 中断 0→1428 + 零分配失败） |
 | 8 | 改 dts 忘重编 dist，CI 拦下 | 门禁按设计工作 | dtc 门禁同款参数重编同步 | `verify-repo-static.sh` 逐字节 cmp |
 | 9 | CI `set: pipefail invalid option name` | API blob 直传把工作区 CRLF 入库（autocrlf 只保护本地 commit 路径） | 3 文件转 LF + `.gitattributes eol=lf` + API 推送强制 LF | `.gitattributes` |
 | 10 | 构建脚本 head 拿错 vermagic 编模块被拒 | 社区内核包后缀与基镜像不同 | release 一律取自基镜像 | `build-modules.sh` vermagic 硬闸 |
@@ -225,11 +225,20 @@
   三 supplier、clk_npu=600MHz、官方三镜像 DTB 对照）——**DT 侧无罪**。
 - 根因：`rknpu_drv.c:1331` `iommu_group_get(dev)==NULL → -EINVAL`（飞牛 6.18 pm_domain
   冷启动 pwrup 握手失败挡住 iommu probe）。
-- 修复（dts 两处）：`iommu@fde4b000 status="disabled"`（走 non-iommu 逃生门，注释写清回退开关）
-  + `npu@fde40000 interrupt-names="npu_irq"`。
-- 验收：root 跑 `img2vec_medium.rk3568.rknn` → `OK 3607.7ms outs=[(1,768)]`；
-  `/proc/interrupts` `122:` 0→25；npu 域自动 pwrup off→on/active，冷启动零干预。
-  推理须 root（`/dev/dri/card1` root:video 660）。
+- **旧修复（2026-10-12，已于 2026-10-27 撤销）**：`iommu@fde4b000 status="disabled"` 走 non-iommu
+  逃生门 + `npu@fde40000 interrupt-names="npu_irq"`。当时验收：`img2vec_medium.rk3568.rknn`
+  → `OK 3607.7ms outs=[(1,768)]`、中断 0→25。**代价是 GEM 必须物理连续 → 受 CMA 256M 约束，
+  fnOS `trim.face_det` 的 339MiB 单次申请必然失败（每 90 秒刷 `failed to allocate 355860480 buffer`）。**
+- **新修复（2026-10-27 实机翻案）**：`iommu@fde4b000 status="okay"`（跟随官方 R5S）。
+  冷启动仍会打一次 `failed to get ack on domain 'npu', val=0x1ee`（第 9.1s），但 genpd 的
+  `Timed out. Forcing sync_state()`（+10s）接手后 **iommu 在 22s 正常 probe**：
+  `/sys/class/iommu/fde4b000.iommu`（driver=rk_iommu）、`iommu_group/8`、
+  dmesg `RKNPU fde40000.npu: rknpu iommu is enabled, using iommu mode`；
+  NPU 中断 0→1428、`trim.txt2vec` 推理正常、**cma alloc failed 0 / failed to allocate 0**。
+  iommu 模式下 GEM 走 scatter-gather 吃系统内存 → 339MiB 不再撞 CMA 墙。
+  推理仍须 root（`/dev/dri/card1` root:video 660）。
+- 教训：**"DT 侧无法根治" 这类结论要绑内核版本**（当时 6.18.18.c951-trim）；换内核/换 DTB 后
+  必须重新实测，否则会把一个已经可用的官方默认值永久关掉。
 
 ---
 

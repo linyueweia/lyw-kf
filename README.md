@@ -131,9 +131,12 @@ K1 的 eMMC 是 **Rockchip 安卓式 GPT**（p1 uboot / p2 misc / p3 boot / p4 r
   `opp-table-1`、NPU opp 表补 `rockchip,init-freq=<900MHz>`、`vepu@fdee0000` 节点名、
   `rga@fdeb0000` 的 `reg=0x180` + `clock-names=aclk/hclk/sclk`、新增 `rk_rga@fdeb0000`(rockchip,rga2)、
   三个 IOMMU 补 `interrupt-names`（vdpu_mmu/vepu_mmu/rkvdec_mmu）。
-- 两条**故意不齐**（已登记 allowlist，附实机证据）：`vdpu@fdea0400`（与在用 legacy 解码节点寄存器
-  重叠，新增会让同一硬件被两个 mpp 客户端争用 —— 就是 10-19 转码死机那一类风险，需先上机验证）、
-  `iommu@fde4b000` 保持 disabled（本板 NPU 电源域握手失败，只能走 non-iommu 逃生门，10-15 实机验收通过）。
+- 一条**故意不齐**（已登记 allowlist，附实机证据）：`vdpu@fdea0400`（与在用 legacy 解码节点寄存器
+  重叠，新增会让同一硬件被两个 mpp 客户端争用 —— 就是 10-19 转码死机那一类风险，需先上机验证）。
+  ~~`iommu@fde4b000` 保持 disabled~~ **2026-10-27 已撤销、改回官方 `okay`**：实机 iommu 正常 probe
+  （`/sys/class/iommu/fde4b000.iommu`、`iommu_group/8`），dmesg `rknpu iommu is enabled, using iommu mode`，
+  NPU 中断 0→1428、零分配失败。冷启动仍会打一次 ack 超时，但 genpd `Forcing sync_state()` 后 iommu 就起来了
+  —— 旧结论「DT 侧无法根治」已过期。详见 `TROUBLESHOOTING.md` §2.3。
 - **CMA = 256M**（官方 R5S 的 `fnEnv.txt` 就是 `extraargs=cma=256M`；官方 DTB 无 reserved CMA 区，
   cmdline 的 `cma=` 是唯一决定因素）。构建期硬断言 `extraargs` 必须含 `cma=256M`，镜像门禁再断言一次
   并反向拒绝 1G/2G。历史 1G 只是绕开相册 AI 的 339MB 连续申请，**不再使用**。
@@ -193,13 +196,14 @@ sudo xz -dc out/*.img.xz | sudo dd of=/dev/mmcblk1 bs=4M conv=fsync status=progr
 
 ## 已知限制（如实记录）
 
-- **CMA 固定 256M（官方 R5S 口径）**：相册 AI 的重负载（`trim.img2vec` → rknpu 单次申请
-  173MB/339MB 连续 DMA）在 256M 下必然失败（`cma: alloc failed -16`），闭源 rknpu 0.9.8 的失败
-  路径可能把内核挂死 → 靠硬件看门狗 44s 硬复位自愈。**这是官方同口径的代价，不是本仓 bug**；
-  要跑重负载相册 AI 才需要临时放大 CMA（改 `/boot/fnEnv.txt` 的 `extraargs`，重启生效）。
-- **媒体簇两处与官方 R5S 不同**（见 `dts/r5s-media-allowlist.txt`，每条例外都附实机证据）：
-  不新增 `vdpu@fdea0400`（与在用 legacy 解码节点寄存器重叠）、`iommu@fde4b000` 保持 disabled
-  （NPU 电源域握手失败 → 只能 non-iommu）。
+- **CMA 固定 256M（官方 R5S 口径）**，且**够用**——前提是 NPU 走 iommu 模式（2026-10-27 起默认）：
+  iommu 模式下 rknpu 的 GEM 走 scatter-gather 从系统内存分配，不受 CMA 尺寸约束；
+  non-iommu 逃生门则必须物理连续，fnOS `trim.face_det` 单次 339MiB 会必失败（`cma: alloc failed -16`），
+  并可能把内核挂死（靠看门狗 44s 硬复位）。**所以「相册 AI 要不要放大 CMA」这个老问题已经被
+  「iommu 模式」从根上解决**：不要为了 339MB 去放大 CMA，那会挤压 VPU 编解码共用的 CMA。
+- **媒体簇与官方 R5S 只剩一处不同**（见 `dts/r5s-media-allowlist.txt`，附实机证据）：
+  不新增 `vdpu@fdea0400`（与在用 legacy 解码节点寄存器重叠）。`iommu@fde4b000` 已于 2026-10-27
+  改回官方 `okay`（iommu 模式，NPU 走 scatter-gather）。
 - **摄像头 gc5035**：飞牛 6.18 骨架没有 MIPI-CSI/rkisp 基础设施，强行导入会把 5.10 厂商 CSI 节点
   （含错乱引用）带进来，故剔除 —— 本产物下摄像头大概率无法工作。
 - **HDMI/VOP**：保留骨架（6.18）值，K1 特有板级参数未覆盖，需上机确认。
