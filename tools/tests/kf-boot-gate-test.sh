@@ -54,7 +54,7 @@ open(p, 'wb').write(bytes(data))
 PY
 }
 
-s_ok()      { printf 'verbosity=1\nkernelfile=vmlinuz-6.18.18.c1145-trim\nextraargs=cma=256M loglevel=7\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz-6.18.18.c1145-trim" img; }
+s_ok()      { printf 'verbosity=1\nkernelfile=vmlinuz-6.18.18.c1145-trim\nextraargs=cma=256M\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz-6.18.18.c1145-trim" img; }
 s_gzip()    { printf 'kernelfile=vmlinuz\nextraargs=cma=256M\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz-real" gzip; ln -s vmlinuz-real "$1/vmlinuz"; }
 s_nokf()    { printf 'verbosity=1\nextraargs=cma=256M\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz-6.18.18.c1145-trim" img; }
 s_dangling(){ printf 'kernelfile=vmlinuz-6.18.18.c951-trim\nextraargs=cma=256M\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz-6.18.18.c1145-trim" img; }
@@ -63,6 +63,10 @@ s_junk()    { printf 'kernelfile=vmlinuz\nextraargs=cma=256M\n' > "$1/fnEnv.txt"
 s_cma1g()   { printf 'kernelfile=vmlinuz\nextraargs=cma=1G loglevel=7\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz" img; }
 s_cma2g()   { printf 'kernelfile=vmlinuz\nextraargs=cma=2G\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz" img; }
 s_nokernel(){ printf 'kernelfile=vmlinuz-x\nextraargs=cma=256M\n' > "$1/fnEnv.txt"; }
+# 2026-10-27 新增：产品口径的 extraargs 只能是 cma=256M ——
+# 历史上 "cma=256M loglevel=7 ignore_loglevel" 被当成合法（旧门禁只 grep cma=256M），
+# 结果它随镜像发布、开机全程刷屏。这条负例锁死"不得夹带调试参数"。
+s_dbg()     { printf 'kernelfile=vmlinuz\nextraargs=cma=256M loglevel=7 ignore_loglevel\n' > "$1/fnEnv.txt"; mk_kernel "$1/vmlinuz" img; }
 
 echo "== 引导参数硬门禁单元测试（$SRC）"
 F=0
@@ -75,6 +79,7 @@ run_case "内容不是内核 → 判死"                 fail s_junk     || F=$(
 run_case "cma=1G（历史回退）→ 判死"            fail s_cma1g    || F=$((F+1))
 run_case "cma=2G → 判死"                       fail s_cma2g    || F=$((F+1))
 run_case "分区里没有任何内核 → 判死"            fail s_nokernel || F=$((F+1))
-TOTAL=9
+run_case "extraargs 夹带 loglevel=7 → 判死"     fail s_dbg      || F=$((F+1))
+TOTAL=10
 if [[ $F -eq 0 ]]; then echo "结果: $TOTAL/$TOTAL 通过"; else echo "结果: $((TOTAL-F))/$TOTAL 通过（$F 例未过）"; fi
 exit $F
